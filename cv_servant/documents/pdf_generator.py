@@ -152,3 +152,65 @@ class PDFGenerator:
 
         doc.build(story)
         return output_path
+
+    @classmethod
+    def generate_cover_letter(cls, profile: Dict[str, Any], output_path: Path) -> Path:
+        """Generates pristine, formal Cover Letter PDF."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        doc = SimpleDocTemplate(
+            str(output_path),
+            pagesize=letter,
+            leftMargin=0.75 * inch,
+            rightMargin=0.75 * inch,
+            topMargin=0.75 * inch,
+            bottomMargin=0.75 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+
+        style_name = ParagraphStyle(
+            "CLName",
+            parent=styles["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=15,
+            leading=18,
+            textColor=colors.HexColor("#0f1e36"),
+        )
+        style_sub = ParagraphStyle(
+            "CLSub",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=9.5,
+            leading=13,
+            textColor=colors.HexColor("#4a5568"),
+        )
+        style_body = ParagraphStyle(
+            "CLBody",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=10,
+            leading=14.5,
+            textColor=colors.HexColor("#2d3748"),
+            spaceAfter=10,
+        )
+
+        story = []
+        info = profile["personal_info"]
+
+        # Header Letterhead
+        story.append(Paragraph(info["full_name"], style_name))
+        contact_line = f"{info['title']} | {info['location']} | {info['phone']} | {info['email']}"
+        story.append(Paragraph(contact_line, style_sub))
+        links_line = f"LinkedIn: {info['linkedin']} | Portfolio: https://mustafash1986.github.io/mustafa-portfolio1/"
+        story.append(Paragraph(links_line, style_sub))
+        story.append(Spacer(1, 4))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1b4965"), spaceBefore=4, spaceAfter=14))
+
+        # Body paragraphs
+        letter_content = profile.get("cover_letter", "")
+        for para in letter_content.split("\n\n"):
+            if para.strip():
+                story.append(Paragraph(para.strip().replace("\n", "<br/>"), style_body))
+
+        doc.build(story)
+        return output_path

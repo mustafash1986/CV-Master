@@ -68,8 +68,10 @@ class ApplicationCoordinator:
         pdf_cv_path = folder_path / f"Mustafa_Shawky_{clean_title}_ATS.pdf"
         docx_cv_path = folder_path / f"Mustafa_Shawky_{clean_title}_ATS.docx"
         docx_cl_path = folder_path / f"Cover_Letter_{clean_company}.docx"
+        pdf_cl_path = folder_path / f"Cover_Letter_{clean_company}.pdf"
 
         PDFGenerator.generate_resume(tailored_profile, pdf_cv_path)
+        PDFGenerator.generate_cover_letter(tailored_profile, pdf_cl_path)
         WordGenerator.generate_resume(tailored_profile, docx_cv_path)
         WordGenerator.generate_cover_letter(tailored_profile, docx_cl_path)
 
@@ -83,24 +85,30 @@ class ApplicationCoordinator:
             f.write(f"Country: {analysis.get('country')}\n")
             f.write(f"Visa Sponsorship: {analysis.get('visa_sponsorship')} - {analysis.get('sponsorship_notes')}\n")
             f.write(f"Application Email: {analysis.get('application_email')}\n")
+            f.write(f"Job URL: {analysis.get('job_url', '')}\n")
+            f.write(f"Portfolio Website: https://mustafash1986.github.io/mustafa-portfolio1/\n")
             f.write(f"Fit Score: {analysis.get('fit_score')}%\n\n")
             f.write(f"EMAIL SUBJECT:\n{tailored_profile.get('email_subject')}\n\n")
             f.write(f"EMAIL BODY:\n{tailored_profile.get('email_body')}\n\n")
             f.write(f"COVER LETTER:\n{tailored_profile.get('cover_letter')}\n\n")
 
         # 6. Prepare Job Record and Log to Excel
+        job_url_val = analysis.get("job_url", "")
         job_record = {
             "company_name": analysis.get("company_name"),
             "job_title": analysis.get("job_title"),
             "country": analysis.get("country"),
             "city": analysis.get("city"),
             "application_method": analysis.get("application_method"),
-            "application_email": analysis.get("application_email"),
+            "application_email": analysis.get("application_email") or job_url_val,
+            "job_url": job_url_val,
             "visa_sponsorship": analysis.get("visa_sponsorship"),
             "sponsorship_notes": analysis.get("sponsorship_notes"),
             "status": "Pending Approval",
             "folder_path": str(folder_path),
             "pdf_cv_path": str(pdf_cv_path),
+            "pdf_cl_path": str(pdf_cl_path),
+            "docx_cv_path": str(docx_cv_path),
             "docx_cl_path": str(docx_cl_path),
             "email_subject": tailored_profile.get("email_subject"),
             "email_body": tailored_profile.get("email_body"),
@@ -171,18 +179,27 @@ class ApplicationCoordinator:
 
             folder_path = Path(job.get("folder_path", "")) if job.get("folder_path") else None
 
-            # 1. Resolve attachments: check explicit paths first, then scan job folder
+            # 1. Resolve attachments: PDF CV + PDF Cover Letter + Portfolio PDF
             attachments = []
             if job.get("pdf_cv_path") and Path(job["pdf_cv_path"]).exists():
                 attachments.append(Path(job["pdf_cv_path"]))
-            if job.get("docx_cl_path") and Path(job["docx_cl_path"]).exists():
+            if job.get("pdf_cl_path") and Path(job["pdf_cl_path"]).exists():
+                attachments.append(Path(job["pdf_cl_path"]))
+            elif job.get("docx_cl_path") and Path(job["docx_cl_path"]).exists():
                 attachments.append(Path(job["docx_cl_path"]))
 
             if not attachments and folder_path and folder_path.exists():
                 for p in folder_path.glob("*.pdf"):
                     attachments.append(p)
                 for c in folder_path.glob("Cover_Letter*.docx"):
-                    attachments.append(c)
+                    if not any("Cover_Letter" in str(x) for x in attachments):
+                        attachments.append(c)
+
+            # Attach Email-Ready Portfolio PDF (5.3 MB)
+            from cv_servant.config import DATA_DIR
+            portfolio_pdf = DATA_DIR / "portfolio" / "Mustafa_Mahmoud_Portfolio_Email_Ready.pdf"
+            if portfolio_pdf.exists() and portfolio_pdf not in attachments:
+                attachments.append(portfolio_pdf)
 
             # 2. Resolve rich Email Body: check memory, then dossier file, then rich template
             body_text = job.get("email_body", "")
@@ -218,8 +235,9 @@ class ApplicationCoordinator:
                     f"• Autodesk Certified Professional in Revit Architecture (#00424122)\n"
                     f"• Registered Professional Architect (KSE & Egyptian Syndicate) and BEFA eligible\n"
                     f"• Developed 19+ custom Revit plugins slashing task completion times by up to 80%\n\n"
-                    f"Please find attached my detailed ATS-optimized Curriculum Vitae and formal Cover Letter for your review. "
+                    f"Please find attached my detailed ATS-optimized Curriculum Vitae, formal Cover Letter, and Project Portfolio for your review. "
                     f"I welcome the opportunity to discuss how my expertise can support your upcoming projects.\n\n"
+                    f"🌐 Interactive Online Portfolio: https://mustafash1986.github.io/mustafa-portfolio1/\n\n"
                     f"Sincerely,\n\n"
                     f"Mustafa Mahmoud Shawky\n"
                     f"Senior Architect & BIM Specialist / BIM Manager\n"
@@ -227,6 +245,16 @@ class ApplicationCoordinator:
                     f"Email: arch.mustafa.mahmoud.2007@gmail.com\n"
                     f"LinkedIn: linkedin.com/in/mostafamahmoud-architect"
                 )
+
+            # Ensure portfolio link is included if body was generated by LLM
+            portfolio_link = "🌐 Interactive Online Portfolio: https://mustafash1986.github.io/mustafa-portfolio1/"
+            if "mustafa-portfolio1" not in body_text:
+                if "Sincerely," in body_text:
+                    body_text = body_text.replace("Sincerely,", f"{portfolio_link}\n\nSincerely,")
+                elif "Best regards," in body_text:
+                    body_text = body_text.replace("Best regards,", f"{portfolio_link}\n\nBest regards,")
+                else:
+                    body_text += f"\n\n{portfolio_link}"
 
             # Send Email via Gmail
             try:
@@ -245,7 +273,8 @@ class ApplicationCoordinator:
                             f"🎉 <b>تم إرسال التقديم بنجاح!</b>\n"
                             f"🏢 {job.get('company_name')}\n"
                             f"✉️ إلى: {email_addr}\n"
-                            f"📎 المرفقات: {len(attachments)} ملفات (CV + Cover Letter)"
+                            f"📎 المرفقات: {len(attachments)} ملفات (CV + Cover Letter + Portfolio)\n"
+                            f"🌐 البورتفوليو أونلاين: https://mustafash1986.github.io/mustafa-portfolio1/"
                         )
                     return True
             except Exception as e:
@@ -254,9 +283,19 @@ class ApplicationCoordinator:
 
         elif action in ["MANUAL_FOLDER", "OPEN_PORTAL"]:
             import webbrowser
+            import urllib.parse
             url = job.get("job_url") or job.get("contact", "")
-            if url and ("http://" in str(url) or "https://" in str(url)):
+            if not url or not ("http://" in str(url) or "https://" in str(url)):
+                comp = job.get("company_name", "")
+                tit = job.get("job_title", "")
+                cntry = job.get("country", "")
+                query = urllib.parse.quote(f"{comp} {tit} {cntry} careers apply")
+                url = f"https://www.google.com/search?q={query}"
+
+            try:
                 webbrowser.open(url)
+            except Exception as e:
+                logger.warning(f"Could not open browser URL: {e}")
 
             folder_path = job.get("folder_path")
             if folder_path and Path(folder_path).exists():

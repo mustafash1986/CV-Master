@@ -13,6 +13,7 @@ from cv_servant.config import TARGET_COUNTRIES
 logger = logging.getLogger(__name__)
 
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+URL_REGEX = re.compile(r"https?://[^\s<>\"']+")
 
 
 class JobAnalyzer:
@@ -20,7 +21,7 @@ class JobAnalyzer:
         self.ollama = ollama_client or OllamaClient()
 
     def detect_country_and_sponsorship_heuristics(self, text: str) -> Dict[str, Any]:
-        """Fast heuristic check for country and visa sponsorship keywords."""
+        """Fast heuristic check for country, visa sponsorship, email, and job URLs."""
         lower_text = text.lower()
         detected_country = "Unknown"
         sponsorship_status = "Not Mentioned"
@@ -38,15 +39,19 @@ class JobAnalyzer:
         elif "citizens only" in lower_text or "must have permanent residency" in lower_text or "سعوديين فقط" in lower_text or "كويتيين فقط" in lower_text:
             sponsorship_status = "Local Only / Restricted"
 
-        # Regex email scan
+        # Regex email and URL scan
         emails = EMAIL_REGEX.findall(text)
         primary_email = emails[0] if emails else ""
+
+        urls = URL_REGEX.findall(text)
+        primary_url = urls[0] if urls else ""
 
         return {
             "country": detected_country,
             "sponsorship_status": sponsorship_status,
             "detected_indicators": matched_indicators,
             "detected_email": primary_email,
+            "detected_url": primary_url,
         }
 
     def analyze_job(self, raw_job_text: str) -> Dict[str, Any]:
@@ -101,6 +106,9 @@ Job Posting Text:
                 data["visa_sponsorship"] = "AVAILABLE"
                 data["sponsorship_notes"] = f"Detected: {heuristics['sponsorship_status']}"
 
+            if heuristics.get("detected_url"):
+                data["job_url"] = heuristics["detected_url"]
+
             data["raw_text"] = raw_job_text
             return data
 
@@ -112,6 +120,7 @@ Job Posting Text:
                 "country": heuristics["country"],
                 "city": "",
                 "application_email": heuristics["detected_email"],
+                "job_url": heuristics.get("detected_url", ""),
                 "application_method": "EMAIL" if heuristics["detected_email"] else "WEBSITE_FORM",
                 "visa_sponsorship": "AVAILABLE" if heuristics["sponsorship_status"].startswith("Available") else "NOT_MENTIONED",
                 "sponsorship_notes": heuristics["sponsorship_status"],
