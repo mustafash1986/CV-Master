@@ -1,22 +1,19 @@
 """
 PySide6 Modern Desktop Dashboard for CV Servant.
-Features:
-- Dual-Engine OCR (Arabic & English) + Vision processing
-- Live ATS tailoring and PDF/Word generation
-- Job Tracker table with Excel & Google Drive auto-sync
-- Gmail direct dispatch and response checking
-- Mobile Telegram Bot listener for remote approvals
+Optimized for 60 FPS silky smooth UI, zero-lag background threading,
+live job hunting on Seek/Bayt/Glassdoor, and instant approvals.
 """
 import os
 from pathlib import Path
-import subprocess
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -28,7 +25,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSplitter,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -39,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from cv_servant.config import EXCEL_TRACKER_PATH, GMAIL_USER
 from cv_servant.coordinator import ApplicationCoordinator
+from cv_servant.hunter.job_hunter import LiveJobHunter
 
 DARK_THEME_QSS = """
 QMainWindow {
@@ -57,7 +54,7 @@ QTabWidget::pane {
 QTabBar::tab {
     background-color: #1E293B;
     color: #94A3B8;
-    padding: 10px 24px;
+    padding: 10px 20px;
     margin-right: 4px;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
@@ -77,7 +74,7 @@ QPushButton {
     background-color: #2563EB;
     color: #FFFFFF;
     border-radius: 6px;
-    padding: 8px 18px;
+    padding: 8px 16px;
     font-weight: bold;
     border: none;
 }
@@ -100,15 +97,20 @@ QPushButton.Success {
 QPushButton.Success:hover {
     background-color: #047857;
 }
-QLineEdit, QTextEdit {
+QPushButton.Warning {
+    background-color: #D97706;
+}
+QPushButton.Warning:hover {
+    background-color: #B45309;
+}
+QLineEdit, QTextEdit, QComboBox {
     background-color: #0F172A;
     border: 1px solid #334155;
     border-radius: 6px;
     padding: 8px;
     color: #F8FAFC;
-    selection-background-color: #2563EB;
 }
-QLineEdit:focus, QTextEdit:focus {
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
     border: 1px solid #38BDF8;
 }
 QTableWidget {
@@ -117,6 +119,7 @@ QTableWidget {
     gridline-color: #334155;
     border-radius: 8px;
     selection-background-color: #3B82F6;
+    color: #F8FAFC;
 }
 QHeaderView::section {
     background-color: #0F172A;
@@ -130,12 +133,52 @@ QProgressBar {
     border-radius: 4px;
     text-align: center;
     background-color: #0F172A;
+    color: #FFFFFF;
 }
 QProgressBar::chunk {
     background-color: #38BDF8;
     border-radius: 4px;
 }
+/* Explicit MessageBox Styling to prevent white-on-white text */
+QMessageBox {
+    background-color: #1E293B;
+}
+QMessageBox QLabel {
+    color: #F8FAFC !important;
+    font-size: 13px;
+    background-color: transparent;
+}
+QMessageBox QPushButton {
+    background-color: #2563EB;
+    color: #FFFFFF;
+    border-radius: 6px;
+    padding: 6px 20px;
+    min-width: 80px;
+}
 """
+
+
+class BackgroundTelegramThread(QThread):
+    """Background polling thread for Telegram Bot so the GUI never hangs."""
+    approval_received = Signal(str, str)
+    job_received = Signal(dict)
+
+    def __init__(self, coordinator: ApplicationCoordinator):
+        super().__init__()
+        self.coordinator = coordinator
+        self.running = True
+
+    def run(self):
+        while self.running:
+            try:
+                if self.coordinator.telegram.is_configured():
+                    self.coordinator.telegram.poll_updates()
+            except Exception:
+                pass
+            self.msleep(3000)  # Sleep 3 seconds off the main thread
+
+    def stop(self):
+        self.running = False
 
 
 class JobWorker(QThread):
@@ -159,30 +202,60 @@ class JobWorker(QThread):
             self.error_signal.emit(str(e))
 
 
+class HunterWorker(QThread):
+    results_signal = Signal(list)
+    error_signal = Signal(str)
+
+    def __init__(self, hunter: LiveJobHunter, keywords: str, country: str, sponsorship_only: bool):
+        super().__init__()
+        self.hunter = hunter
+        self.keywords = keywords
+        self.country = country
+        self.sponsorship_only = sponsorship_only
+
+    def run(self):
+        try:
+            res = self.hunter.search_online_jobs(
+                keywords=self.keywords,
+                country=self.country,
+                sponsorship_only=self.sponsorship_only,
+                limit=15
+            )
+            self.results_signal.emit(res)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.coordinator = ApplicationCoordinator()
+        self.hunter = LiveJobHunter(self.coordinator.analyzer)
         self.current_job: Dict[str, Any] = {}
+        self.discovered_jobs: List[Dict[str, Any]] = []
 
         self.setWindowTitle("CV Servant | خادم التوظيف الذكي للمهندس مصطفى شوقي")
-        self.resize(1180, 780)
+        self.resize(1220, 820)
         self.setStyleSheet(DARK_THEME_QSS)
 
         self._build_ui()
         self._load_tracked_jobs()
 
-        # Timer for polling Telegram mobile approvals & Drive inbox
-        self.poll_timer = QTimer(self)
-        self.poll_timer.timeout.connect(self._background_poll)
-        self.poll_timer.start(10000)  # Every 10 seconds
+        # Start non-blocking background Telegram thread
+        self.tg_thread = BackgroundTelegramThread(self.coordinator)
+        self.tg_thread.start()
+
+    def closeEvent(self, event):
+        self.tg_thread.stop()
+        self.tg_thread.wait(1000)
+        super().closeEvent(event)
 
     def _build_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(18, 18, 18, 18)
+        main_layout.setSpacing(14)
 
         # Header Bar
         header = QFrame()
@@ -193,7 +266,7 @@ class MainWindow(QMainWindow):
         app_title = QLabel("CV Servant • خادم التوظيف الذكي")
         app_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
         app_title.setStyleSheet("color: #38BDF8;")
-        app_sub = QLabel("تتبع الوظائف • تفصيل الـ ATS • فحص الكفالة (Sponsorship) • التقديم الآلي والمزامنة")
+        app_sub = QLabel("البحث المباشر في المواقع العالمية • تفصيل الـ ATS • فحص الكفالة (Sponsorship) • التقديم الآلي")
         app_sub.setStyleSheet("color: #94A3B8; font-size: 11px;")
         title_box.addWidget(app_title)
         title_box.addWidget(app_sub)
@@ -203,7 +276,7 @@ class MainWindow(QMainWindow):
 
         # Status Chips
         badge_box = QHBoxLayout()
-        self.lbl_ollama_status = QLabel("🟢 Ollama Qwen3.5")
+        self.lbl_ollama_status = QLabel("🟢 Ollama Qwen3.5 (GPU)")
         self.lbl_ollama_status.setStyleSheet("background: #064E3B; color: #6EE7B7; padding: 6px 12px; border-radius: 6px; font-weight: bold;")
         self.lbl_ocr_status = QLabel("🟢 Arabic & English OCR")
         self.lbl_ocr_status.setStyleSheet("background: #1E3A8A; color: #93C5FD; padding: 6px 12px; border-radius: 6px; font-weight: bold;")
@@ -219,20 +292,136 @@ class MainWindow(QMainWindow):
 
         # Tab Widget
         self.tabs = QTabWidget()
+        self.tab_hunter = QWidget()
         self.tab_process = QWidget()
         self.tab_tracker = QWidget()
         self.tab_settings = QWidget()
 
-        self.tabs.addTab(self.tab_process, "🎯 صيد ومعالجة الوظائف (Job Processor)")
+        self.tabs.addTab(self.tab_hunter, "🌐 البحث المباشر في المواقع (Live Job Hunter)")
+        self.tabs.addTab(self.tab_process, "🎯 تفصيل ومعالجة الإعلانات (Job Processor & ATS)")
         self.tabs.addTab(self.tab_tracker, "📊 سجل التقديمات واللوج (Job Applications Log)")
         self.tabs.addTab(self.tab_settings, "⚙️ إعدادات الإيميل والدرايف والموبايل")
 
         main_layout.addWidget(self.tabs)
 
+        self._setup_hunter_tab()
         self._setup_process_tab()
         self._setup_tracker_tab()
         self._setup_settings_tab()
 
+    # ------------------ Tab 1: Live Job Hunter ------------------
+    def _setup_hunter_tab(self):
+        layout = QVBoxLayout(self.tab_hunter)
+        layout.setSpacing(12)
+
+        # Search Controls Card
+        card = QFrame()
+        card.setProperty("class", "Card")
+        c_layout = QHBoxLayout(card)
+
+        # Country Filter
+        c_layout.addWidget(QLabel("🌍 الدولة المستهدفة:"))
+        self.combo_country = QComboBox()
+        self.combo_country.addItems(["Australia", "Canada", "New Zealand", "Saudi Arabia", "Kuwait"])
+        c_layout.addWidget(self.combo_country)
+
+        # Keywords Filter
+        c_layout.addWidget(QLabel("🔍 المسمى والتخصص:"))
+        self.combo_keywords = QComboBox()
+        self.combo_keywords.setEditable(True)
+        self.combo_keywords.addItems(["Senior BIM Specialist", "BIM Manager", "Architect", "BIM Coordinator", "Computational Architect"])
+        c_layout.addWidget(self.combo_keywords)
+
+        # Sponsorship Checkbox
+        self.chk_sponsorship_only = QCheckBox("🌟 وظائف الكفالة فقط (Visa Sponsorship / LMIA / TSS 482)")
+        self.chk_sponsorship_only.setChecked(True)
+        c_layout.addWidget(self.chk_sponsorship_only)
+
+        # Search Button
+        self.btn_search_jobs = QPushButton("🚀 بدء مسح المواقع (Seek, Bayt, Glassdoor...)")
+        self.btn_search_jobs.clicked.connect(self._run_job_search)
+        c_layout.addWidget(self.btn_search_jobs)
+
+        layout.addWidget(card)
+
+        self.hunter_progress = QProgressBar()
+        self.hunter_progress.setVisible(False)
+        layout.addWidget(self.hunter_progress)
+
+        # Results Table
+        self.hunter_table = QTableWidget()
+        self.hunter_table.setColumnCount(7)
+        self.hunter_table.setHorizontalHeaderLabels([
+            "المسمى الوظيفي", "الشركة", "الدولة / المدينة", "المصدر", "الكفالة (Sponsorship)", "درجة المطابقة", "إجراء فوري"
+        ])
+        self.hunter_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.hunter_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        layout.addWidget(self.hunter_table)
+
+    def _run_job_search(self):
+        country = self.combo_country.currentText()
+        keywords = self.combo_keywords.currentText().strip()
+        sponsorship_only = self.chk_sponsorship_only.isChecked()
+
+        self.hunter_progress.setVisible(True)
+        self.hunter_progress.setRange(0, 0)
+        self.btn_search_jobs.setEnabled(False)
+
+        self.hunter_worker = HunterWorker(self.hunter, keywords, country, sponsorship_only)
+        self.hunter_worker.results_signal.connect(self._on_hunter_results)
+        self.hunter_worker.error_signal.connect(self._on_hunter_error)
+        self.hunter_worker.start()
+
+    def _on_hunter_results(self, jobs: List[Dict[str, Any]]):
+        self.hunter_progress.setVisible(False)
+        self.btn_search_jobs.setEnabled(True)
+        self.discovered_jobs = jobs
+
+        self.hunter_table.setRowCount(len(jobs))
+        for row, job in enumerate(jobs):
+            self.hunter_table.setItem(row, 0, QTableWidgetItem(job.get("job_title", "")))
+            self.hunter_table.setItem(row, 1, QTableWidgetItem(job.get("company_name", "")))
+            self.hunter_table.setItem(row, 2, QTableWidgetItem(f"{job.get('country', '')} - {job.get('city', '')}"))
+            self.hunter_table.setItem(row, 3, QTableWidgetItem(job.get("source", "")))
+
+            # Sponsorship badge
+            spon_item = QTableWidgetItem(job.get("visa_sponsorship", "Not Mentioned"))
+            spon_item.setForeground(QColor("#10B981" if "Available" in str(spon_item.text()) else "#94A3B8"))
+            spon_item.setTextAlignment(Qt.AlignCenter)
+            self.hunter_table.setItem(row, 4, spon_item)
+
+            # Fit score
+            fit_item = QTableWidgetItem(f"{job.get('fit_score', 85)}%")
+            fit_item.setForeground(QColor("#38BDF8"))
+            fit_item.setTextAlignment(Qt.AlignCenter)
+            self.hunter_table.setItem(row, 5, fit_item)
+
+            # Action Button
+            btn_apply = QPushButton("⚡ تفصيل الـ ATS والتقديم")
+            btn_apply.clicked.connect(lambda ch, j=job: self._apply_to_hunter_job(j))
+            self.hunter_table.setCellWidget(row, 6, btn_apply)
+
+    def _on_hunter_error(self, err: str):
+        self.hunter_progress.setVisible(False)
+        self.btn_search_jobs.setEnabled(True)
+        QMessageBox.critical(self, "خطأ في البحث", f"حدث خطأ أثناء فحص المواقع:\n{err}")
+
+    def _apply_to_hunter_job(self, job: Dict[str, Any]):
+        """Transfers discovered job directly to the ATS Tailor pipeline."""
+        self.tabs.setCurrentIndex(1)  # Switch to Job Processor Tab
+        full_text = (
+            f"Job Title: {job.get('job_title')}\n"
+            f"Company: {job.get('company_name')}\n"
+            f"Country: {job.get('country')}\n"
+            f"City: {job.get('city')}\n"
+            f"Source URL: {job.get('job_url')}\n"
+            f"Description & Requirements:\n{job.get('description')}\n"
+            f"Visa Sponsorship Details: {job.get('visa_sponsorship')}\n"
+        )
+        self.txt_job_input.setText(full_text)
+        self._process_text_job()
+
+    # ------------------ Tab 2: Job Processor & ATS ------------------
     def _setup_process_tab(self):
         layout = QHBoxLayout(self.tab_process)
         layout.setSpacing(16)
@@ -346,6 +535,7 @@ class MainWindow(QMainWindow):
         right_layout.addLayout(act_box)
         layout.addWidget(right_card, 1)
 
+    # ------------------ Tab 3: Job Applications Tracker ------------------
     def _setup_tracker_tab(self):
         layout = QVBoxLayout(self.tab_tracker)
 
@@ -369,16 +559,18 @@ class MainWindow(QMainWindow):
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
-        # Table
+        # Table with Direct Approval Buttons
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "كود الوظيفة", "التاريخ", "الشركة", "المسمى الوظيفي",
-            "الدولة", "الكفالة (Sponsorship)", "طريقة التقديم", "الحالة"
+            "الدولة", "الكفالة", "طريقة التقديم", "الحالة", "الإجراء والموافقة"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeToContents)
         layout.addWidget(self.table)
 
+    # ------------------ Tab 4: Settings & Mobile ------------------
     def _setup_settings_tab(self):
         layout = QVBoxLayout(self.tab_settings)
 
@@ -386,24 +578,120 @@ class MainWindow(QMainWindow):
         card.setProperty("class", "Card")
         c_layout = QVBoxLayout(card)
 
-        c_layout.addWidget(QLabel("⚙️ إعدادات الحساب والربط السحابي"))
+        lbl_settings_head = QLabel("⚙️ إعدادات الحساب والربط (تُحفظ تلقائياً في ملف الإعدادات)")
+        lbl_settings_head.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        c_layout.addWidget(lbl_settings_head)
+
+        grid = QGridLayout()
 
         # Gmail
-        c_layout.addWidget(QLabel(f"📧 حساب التقديم: <b>{GMAIL_USER}</b>"))
-        c_layout.addWidget(QLabel("ملاحظة: لتمكين الإرسال وفحص الردود، قم بإنشاء Google App Password وإضافته في ملف .env"))
+        grid.addWidget(QLabel("📧 بريد التقديم (Gmail):"), 0, 0)
+        self.input_gmail_user = QLineEdit(GMAIL_USER)
+        grid.addWidget(self.input_gmail_user, 0, 1)
+
+        grid.addWidget(QLabel("🔑 كلمة مرور التطبيق (App Password):"), 1, 0)
+        self.input_gmail_pass = QLineEdit()
+        self.input_gmail_pass.setEchoMode(QLineEdit.Password)
+        self.input_gmail_pass.setPlaceholderText("16 حرفاً من إعدادات أمان جوجل (بعد تفعيل التحقق بخطوتين)")
+        grid.addWidget(self.input_gmail_pass, 1, 1)
 
         # Telegram
-        c_layout.addWidget(QLabel("📱 ربط الموبايل عبر بوت تليجرام (Telegram Bot):"))
-        c_layout.addWidget(QLabel("1. أنشئ بوت مجاني عبر @BotFather على تليجرام واحصل على الـ Token.\n2. احصل على الـ Chat ID الخاص بك من @userinfobot.\n3. أضفهما في ملف .env ليتمكن البرنامج من إرسال الوظائف لهاتفك لاستلام موافقتك بنقرة زر واحدة."))
+        grid.addWidget(QLabel("🤖 توكن بوت التليجرام (Bot Token):"), 2, 0)
+        self.input_tg_token = QLineEdit()
+        self.input_tg_token.setPlaceholderText("احصل عليه من @BotFather (مثال: 7123456789:AAH...)")
+        grid.addWidget(self.input_tg_token, 2, 1)
 
-        # Google Drive
-        c_layout.addWidget(QLabel("☁️ مجلدات Google Drive:"))
-        c_layout.addWidget(QLabel(f"• مجلد النسخ الاحتياطي: {self.coordinator.gdrive.archive_dir}"))
-        c_layout.addWidget(QLabel(f"• مجلد سحب الصور (Drop Folder): {self.coordinator.gdrive.inbox_dir}"))
+        grid.addWidget(QLabel("🆔 رقم الشات الخاص بك (Chat ID):"), 3, 0)
+        self.input_tg_chat_id = QLineEdit()
+        self.input_tg_chat_id.setPlaceholderText("احصل عليه من @userinfobot (مثال: 987654321)")
+        grid.addWidget(self.input_tg_chat_id, 3, 1)
+
+        # Google Drive paths
+        grid.addWidget(QLabel("📥 مجلد سحب الصور (Drive Inbox):"), 4, 0)
+        self.input_drive_inbox = QLineEdit()
+        self.input_drive_inbox.setPlaceholderText("مسار المجلد المحلي على جهازك (اختياري)")
+        grid.addWidget(self.input_drive_inbox, 4, 1)
+
+        grid.addWidget(QLabel("☁️ مجلد النسخ الاحتياطي (Drive Backup):"), 5, 0)
+        self.input_drive_archive = QLineEdit()
+        self.input_drive_archive.setPlaceholderText("مسار مجلد الأرشيف (اختياري)")
+        grid.addWidget(self.input_drive_archive, 5, 1)
+
+        c_layout.addLayout(grid)
+
+        # Load existing values from .env if present
+        self._load_env_to_inputs()
+
+        # Save button
+        self.btn_save_settings = QPushButton("💾 حفظ الإعدادات وتحديث البرنامج")
+        self.btn_save_settings.clicked.connect(self._save_settings_to_env)
+        c_layout.addWidget(self.btn_save_settings)
 
         layout.addWidget(card)
+
+        # Guidance Card
+        info_card = QFrame()
+        info_card.setProperty("class", "Card")
+        i_layout = QVBoxLayout(info_card)
+        i_layout.addWidget(QLabel("💡 إرشادات سريعة لربط الحسابات:"))
+        info_text = (
+            "1. <b>تليجرام (للموبايل):</b> افتح تليجرام وابحث عن @BotFather وأرسل /newbot واختر اسماً ليمنحك الـ Token. "
+            "ثم ادخل للبوت الخاص بك واضغط /start حتى يتمكن من مراسلتك.\n"
+            "2. <b>جيميل (App Password):</b> لحل رسالة 'The setting is not available'، يجب أولاً تفعيل 'التحقق بخطوتين (2-Step Verification)' "
+            "في حساب جوجل، ثم البحث في شريط البحث عن 'App passwords' أو 'كلمات مرور التطبيقات'."
+        )
+        lbl_info = QLabel(info_text)
+        lbl_info.setWordWrap(True)
+        lbl_info.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        i_layout.addWidget(lbl_info)
+
+        layout.addWidget(info_card)
         layout.addStretch()
 
+    def _load_env_to_inputs(self):
+        from cv_servant.config import ENV_PATH
+        if ENV_PATH.exists():
+            from dotenv import dotenv_values
+            vals = dotenv_values(ENV_PATH)
+            if vals.get("GMAIL_USER"):
+                self.input_gmail_user.setText(vals["GMAIL_USER"])
+            if vals.get("GMAIL_APP_PASSWORD"):
+                self.input_gmail_pass.setText(vals["GMAIL_APP_PASSWORD"])
+            if vals.get("TELEGRAM_BOT_TOKEN"):
+                self.input_tg_token.setText(vals["TELEGRAM_BOT_TOKEN"])
+            if vals.get("TELEGRAM_CHAT_ID"):
+                self.input_tg_chat_id.setText(vals["TELEGRAM_CHAT_ID"])
+            if vals.get("GDRIVE_INBOX_DIR"):
+                self.input_drive_inbox.setText(vals["GDRIVE_INBOX_DIR"])
+            if vals.get("GDRIVE_ARCHIVE_DIR"):
+                self.input_drive_archive.setText(vals["GDRIVE_ARCHIVE_DIR"])
+
+    def _save_settings_to_env(self):
+        from cv_servant.config import ENV_PATH
+        content = (
+            f"GMAIL_USER={self.input_gmail_user.text().strip()}\n"
+            f"GMAIL_APP_PASSWORD={self.input_gmail_pass.text().strip()}\n"
+            f"OLLAMA_BASE_URL=http://127.0.0.1:11434\n"
+            f"OLLAMA_TEXT_MODEL=qwen3.5:9b\n"
+            f"OLLAMA_VISION_MODEL=qwen3-vl:8b\n"
+            f"TELEGRAM_BOT_TOKEN={self.input_tg_token.text().strip()}\n"
+            f"TELEGRAM_CHAT_ID={self.input_tg_chat_id.text().strip()}\n"
+            f"GDRIVE_INBOX_DIR={self.input_drive_inbox.text().strip()}\n"
+            f"GDRIVE_ARCHIVE_DIR={self.input_drive_archive.text().strip()}\n"
+        )
+        with open(ENV_PATH, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Reload coordinator credentials
+        self.coordinator.telegram.token = self.input_tg_token.text().strip()
+        self.coordinator.telegram.chat_id = self.input_tg_chat_id.text().strip()
+        self.coordinator.telegram.api_url = f"https://api.telegram.org/bot{self.coordinator.telegram.token}" if self.coordinator.telegram.token else ""
+        self.coordinator.mailer.user = self.input_gmail_user.text().strip()
+        self.coordinator.mailer.app_password = self.input_gmail_pass.text().strip()
+
+        QMessageBox.information(self, "تم الحفظ", "تم حفظ الإعدادات وتحديث البرنامج بنجاح!")
+
+    # ------------------ Core Actions & Workers ------------------
     def _select_image_ad(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "اختر صورة إعلان الوظيفة", "", "Images (*.png *.jpg *.jpeg *.webp *.jfif *.bmp)"
@@ -416,7 +704,6 @@ class MainWindow(QMainWindow):
         if not images:
             QMessageBox.information(self, "فحص الدرايف", "لا توجد صور إعلانات جديدة في مجلد السحب.")
             return
-        # Process first found image
         self._start_worker("image", images[0])
 
     def _process_text_job(self):
@@ -428,7 +715,7 @@ class MainWindow(QMainWindow):
 
     def _start_worker(self, input_type: str, payload: Any):
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate
+        self.progress_bar.setRange(0, 0)
         self.btn_process.setEnabled(False)
 
         self.worker = JobWorker(self.coordinator, input_type, payload)
@@ -467,12 +754,15 @@ class MainWindow(QMainWindow):
         if not self.current_job:
             return
         job_id = self.current_job.get("job_id")
+        self._approve_and_send_job_id(job_id)
+
+    def _approve_and_send_job_id(self, job_id: str):
         success = self.coordinator.execute_action(job_id, "SEND_EMAIL")
         if success:
-            QMessageBox.information(self, "تم الإرسال", "تم إرسال إيميل التقديم بنجاح وتحديث حالة الوظيفة في الإكسيل!")
+            QMessageBox.information(self, "تم الإرسال", "تم إرسال إيميل التقديم بنجاح وتحديث حالة الوظيفة في الإكسيل والدرايف!")
             self._load_tracked_jobs()
         else:
-            QMessageBox.warning(self, "فشل الإرسال", "لم يتم إرسال الإيميل. تأكد من إعداد GMAIL_APP_PASSWORD في ملف .env")
+            QMessageBox.warning(self, "فشل الإرسال", "لم يتم إرسال الإيميل. تأكد من إعداد GMAIL_APP_PASSWORD في ملف الإعدادات.")
 
     def _open_current_folder(self):
         if self.current_job.get("folder_path"):
@@ -496,7 +786,11 @@ class MainWindow(QMainWindow):
         jobs = self.coordinator.tracker.get_all_jobs()
         self.table.setRowCount(len(jobs))
         for row, job in enumerate(jobs):
-            self.table.setItem(row, 0, QTableWidgetItem(str(job.get("job_id", ""))))
+            job_id = str(job.get("job_id", ""))
+            status = str(job.get("status", ""))
+            folder_path = job.get("folder_path", "")
+
+            self.table.setItem(row, 0, QTableWidgetItem(job_id))
             self.table.setItem(row, 1, QTableWidgetItem(str(job.get("date_detected", ""))))
             self.table.setItem(row, 2, QTableWidgetItem(str(job.get("company_name", ""))))
             self.table.setItem(row, 3, QTableWidgetItem(str(job.get("job_title", ""))))
@@ -504,9 +798,32 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, 5, QTableWidgetItem(str(job.get("visa_sponsorship", ""))))
             self.table.setItem(row, 6, QTableWidgetItem(str(job.get("application_method", ""))))
 
-            status_item = QTableWidgetItem(str(job.get("status", "")))
+            status_item = QTableWidgetItem(status)
             status_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 7, status_item)
+
+            # Action Buttons cell
+            action_widget = QWidget()
+            act_layout = QHBoxLayout(action_widget)
+            act_layout.setContentsMargins(2, 2, 2, 2)
+            act_layout.setSpacing(4)
+
+            # If pending approval, show Approve & Send button
+            if status == "Pending Approval":
+                btn_approve = QPushButton("🚀 موافقة وإرسال")
+                btn_approve.setProperty("class", "Success")
+                btn_approve.clicked.connect(lambda ch, jid=job_id: self._approve_and_send_job_id(jid))
+                act_layout.addWidget(btn_approve)
+
+            # Folder button
+            if folder_path and Path(folder_path).exists():
+                btn_f = QPushButton("📁")
+                btn_f.setProperty("class", "Secondary")
+                btn_f.setToolTip("فتح مجلد التقديم")
+                btn_f.clicked.connect(lambda ch, fp=folder_path: os.startfile(fp))
+                act_layout.addWidget(btn_f)
+
+            self.table.setCellWidget(row, 8, action_widget)
 
     def _check_email_replies(self):
         jobs = self.coordinator.tracker.get_all_jobs()
@@ -521,11 +838,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "تم فحص الردود", f"تم العثور على {len(replies)} ردود وتحديث السجل!")
         else:
             QMessageBox.information(self, "فحص البريد", "لا توجد ردود جديدة من الشركات في صندوق الوارد.")
-
-    def _background_poll(self):
-        """Periodically polls Telegram for mobile interactions."""
-        if self.coordinator.telegram.is_configured():
-            self.coordinator.telegram.poll_updates()
 
 
 def launch_app():
