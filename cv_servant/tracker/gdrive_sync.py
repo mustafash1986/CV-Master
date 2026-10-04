@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from cv_servant.config import (
     DATA_DIR,
@@ -21,17 +21,36 @@ logger = logging.getLogger(__name__)
 
 
 class GDriveSync:
+    @staticmethod
+    def _resolve_dir(path_val: Any, default_dir: Path) -> Path:
+        if not path_val:
+            return default_dir
+        val_str = str(path_val).strip()
+        if val_str.startswith("http://") or val_str.startswith("https://"):
+            return default_dir
+        try:
+            p = Path(val_str)
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception as e:
+            logger.warning(f"Invalid path '{val_str}', falling back to default: {e}")
+            return default_dir
+
     def __init__(
         self,
         inbox_dir: Optional[Path] = None,
         archive_dir: Optional[Path] = None,
     ):
-        self.inbox_dir = Path(inbox_dir) if inbox_dir else (Path(GDRIVE_INBOX_DIR) if GDRIVE_INBOX_DIR else INBOX_IMAGES_DIR)
-        self.archive_dir = Path(archive_dir) if archive_dir else (Path(GDRIVE_ARCHIVE_DIR) if GDRIVE_ARCHIVE_DIR else (DATA_DIR / "drive_backup"))
+        self.drive_web_url = GDRIVE_INBOX_DIR if str(GDRIVE_INBOX_DIR).startswith("http") else ""
+        self.inbox_dir = self._resolve_dir(inbox_dir or GDRIVE_INBOX_DIR, INBOX_IMAGES_DIR)
+        self.archive_dir = self._resolve_dir(archive_dir or GDRIVE_ARCHIVE_DIR, DATA_DIR / "drive_backup")
 
-        self.inbox_dir.mkdir(parents=True, exist_ok=True)
-        self.archive_dir.mkdir(parents=True, exist_ok=True)
-        (self.inbox_dir / "processed").mkdir(parents=True, exist_ok=True)
+        try:
+            self.inbox_dir.mkdir(parents=True, exist_ok=True)
+            self.archive_dir.mkdir(parents=True, exist_ok=True)
+            (self.inbox_dir / "processed").mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create directories: {e}")
 
     def scan_for_new_images(self) -> List[Path]:
         """Scan the inbox folder for newly dropped job ad images."""
