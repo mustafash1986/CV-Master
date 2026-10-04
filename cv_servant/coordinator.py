@@ -169,18 +169,72 @@ class ApplicationCoordinator:
                 logger.error("No valid recipient email specified for this job.")
                 return False
 
+            folder_path = Path(job.get("folder_path", "")) if job.get("folder_path") else None
+
+            # 1. Resolve attachments: check explicit paths first, then scan job folder
             attachments = []
             if job.get("pdf_cv_path") and Path(job["pdf_cv_path"]).exists():
                 attachments.append(Path(job["pdf_cv_path"]))
             if job.get("docx_cl_path") and Path(job["docx_cl_path"]).exists():
                 attachments.append(Path(job["docx_cl_path"]))
 
+            if not attachments and folder_path and folder_path.exists():
+                for p in folder_path.glob("*.pdf"):
+                    attachments.append(p)
+                for c in folder_path.glob("Cover_Letter*.docx"):
+                    attachments.append(c)
+
+            # 2. Resolve rich Email Body: check memory, then dossier file, then rich template
+            body_text = job.get("email_body", "")
+            if (not body_text or len(body_text.strip()) < 50) and folder_path and folder_path.exists():
+                dossier_path = folder_path / "application_dossier.txt"
+                if dossier_path.exists():
+                    try:
+                        with open(dossier_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            if "EMAIL BODY:" in content and "COVER LETTER:" in content:
+                                extracted = content.split("EMAIL BODY:")[1].split("COVER LETTER:")[0].strip()
+                                if extracted:
+                                    body_text = extracted
+                    except Exception as e:
+                        logger.warning(f"Could not read dossier: {e}")
+
+            # 3. If still empty, build high-impact executive summary from Master Profile
+            if not body_text or len(body_text.strip()) < 50:
+                title = job.get("job_title", "Senior Architect & BIM Specialist")
+                company = job.get("company_name", "Hiring Team")
+                country = job.get("country", "")
+                loc_str = f" in {country}" if country and country != "N/A" else ""
+                body_text = (
+                    f"Dear Hiring Team at {company},\n\n"
+                    f"I am writing to formally submit my application for the {title} position{loc_str}.\n\n"
+                    f"With over 19 years of distinguished architectural engineering and BIM management experience, "
+                    f"I specialize in Revit modeling, inter-discipline clash detection (Navisworks), and custom workflow automation "
+                    f"using Dynamo and Python. My portfolio spans major institutional, healthcare, and commercial landmark projects, "
+                    f"including the Kuwait University Health Sciences Center (KUHSC) and the Dubai Iconic Tower.\n\n"
+                    f"Key Highlights of my qualifications:\n"
+                    f"• 19+ Years of multidisciplinary architectural leadership across Kuwait and the Gulf region\n"
+                    f"• PMP® Certified Project Manager (PMI #3010938)\n"
+                    f"• Autodesk Certified Professional in Revit Architecture (#00424122)\n"
+                    f"• Registered Professional Architect (KSE & Egyptian Syndicate) and BEFA eligible\n"
+                    f"• Developed 19+ custom Revit plugins slashing task completion times by up to 80%\n\n"
+                    f"Please find attached my detailed ATS-optimized Curriculum Vitae and formal Cover Letter for your review. "
+                    f"I welcome the opportunity to discuss how my expertise can support your upcoming projects.\n\n"
+                    f"Sincerely,\n\n"
+                    f"Mustafa Mahmoud Shawky\n"
+                    f"Senior Architect & BIM Specialist / BIM Manager\n"
+                    f"Mobile: +965 9919 1358\n"
+                    f"Email: arch.mustafa.mahmoud.2007@gmail.com\n"
+                    f"LinkedIn: linkedin.com/in/mostafamahmoud-architect"
+                )
+
             # Send Email via Gmail
             try:
+                subject = job.get("email_subject") or f"Application: {job.get('job_title', 'Senior Architect / BIM Specialist')} - Mustafa Mahmoud Shawky, PMP"
                 success = self.mailer.send_application_email(
                     recipient_email=email_addr,
-                    subject=job.get("email_subject", f"Application: {job.get('job_title', 'Architect')} - Mustafa Mahmoud Shawky, PMP"),
-                    body_text=job.get("email_body", "Dear Hiring Team,\nPlease find attached my CV and application."),
+                    subject=subject,
+                    body_text=body_text,
                     attachment_paths=attachments,
                 )
                 if success:
@@ -191,7 +245,7 @@ class ApplicationCoordinator:
                             f"🎉 <b>تم إرسال التقديم بنجاح!</b>\n"
                             f"🏢 {job.get('company_name')}\n"
                             f"✉️ إلى: {email_addr}\n"
-                            f"تم تحديث الإكسيل ومزامنته مع Google Drive."
+                            f"📎 المرفقات: {len(attachments)} ملفات (CV + Cover Letter)"
                         )
                     return True
             except Exception as e:
