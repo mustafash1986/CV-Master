@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# AI Planning & Agent internal files (Security rule)
+plan.md
+flow.md
+AGENTS.md
+architecture.md
+tasks.md
+*.plan.md
+
+# Credentials & Tokens
+credentials.json
+token.json
+client_secret*.json
+*.pem
+*.key
+
+# Local Data & Temp
+/downloads/
+/scratch/
+*.log
