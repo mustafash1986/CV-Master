@@ -757,12 +757,49 @@ class MainWindow(QMainWindow):
         self._approve_and_send_job_id(job_id)
 
     def _approve_and_send_job_id(self, job_id: str):
+        # Find job
+        job = None
+        for j in self.coordinator.tracker.get_all_jobs():
+            if j.get("job_id") == job_id:
+                job = j
+                break
+
+        contact = str(job.get("contact", "")) if job else ""
+        if not contact or "@" not in contact:
+            QMessageBox.warning(
+                self,
+                "تنبيه: التقديم عبر الموقع",
+                "هذه الوظيفة لا تحتوي على بريد إلكتروني مباشر؛ طريقة التقديم هي عبر موقع الشركة/الفورم. استخدم زر '🌐 موقع التقديم'."
+            )
+            return
+
         success = self.coordinator.execute_action(job_id, "SEND_EMAIL")
         if success:
-            QMessageBox.information(self, "تم الإرسال", "تم إرسال إيميل التقديم بنجاح وتحديث حالة الوظيفة في الإكسيل والدرايف!")
+            QMessageBox.information(self, "تم الإرسال", f"تم إرسال إيميل التقديم بنجاح إلى {contact}\nوتحديث السجل والمزامنة مع Google Drive!")
             self._load_tracked_jobs()
         else:
-            QMessageBox.warning(self, "فشل الإرسال", "لم يتم إرسال الإيميل. تأكد من إعداد GMAIL_APP_PASSWORD في ملف الإعدادات.")
+            QMessageBox.warning(self, "فشل الإرسال", "لم يتم إرسال الإيميل. تحقق من إعدادات الجيميل أو اتصال الإنترنت.")
+
+    def _open_job_portal_action(self, job_id: str):
+        self.coordinator.execute_action(job_id, "OPEN_PORTAL")
+        self._load_tracked_jobs()
+        QMessageBox.information(
+            self,
+            "تم فتح صفحة التقديم",
+            "1. تم فتح رابط التقديم في متصفحك.\n2. تم فتح مجلد ملفات الـ ATS المخصصة لك لتسحب السيرة الذاتية وترفعها على الموقع فوراً!"
+        )
+
+    def _delete_job_action(self, job_id: str):
+        confirm = QMessageBox.question(
+            self,
+            "تأكيد الحذف",
+            f"هل أنت متأكد من حذف الوظيفة ({job_id}) من السجل؟",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if confirm == QMessageBox.Yes:
+            self.coordinator.tracker.delete_job(job_id)
+            self.coordinator.gdrive.sync_tracker_to_drive()
+            self._load_tracked_jobs()
 
     def _open_current_folder(self):
         if self.current_job.get("folder_path"):
@@ -784,10 +821,15 @@ class MainWindow(QMainWindow):
 
     def _load_tracked_jobs(self):
         jobs = self.coordinator.tracker.get_all_jobs()
-        self.table.setRowCount(len(jobs))
-        for row, job in enumerate(jobs):
+        # Filter out empty or None jobs
+        valid_jobs = [j for j in jobs if str(j.get("company_name", "")) not in ["None", ""] and str(j.get("job_title", "")) not in ["None", ""]]
+        self.table.setRowCount(len(valid_jobs))
+
+        for row, job in enumerate(valid_jobs):
             job_id = str(job.get("job_id", ""))
             status = str(job.get("status", ""))
+            method = str(job.get("application_method", ""))
+            contact = str(job.get("contact", ""))
             folder_path = job.get("folder_path", "")
 
             self.table.setItem(row, 0, QTableWidgetItem(job_id))
@@ -796,7 +838,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, 3, QTableWidgetItem(str(job.get("job_title", ""))))
             self.table.setItem(row, 4, QTableWidgetItem(str(job.get("country", ""))))
             self.table.setItem(row, 5, QTableWidgetItem(str(job.get("visa_sponsorship", ""))))
-            self.table.setItem(row, 6, QTableWidgetItem(str(job.get("application_method", ""))))
+            self.table.setItem(row, 6, QTableWidgetItem(method or ("EMAIL" if "@" in contact else "WEBSITE_FORM")))
 
             status_item = QTableWidgetItem(status)
             status_item.setTextAlignment(Qt.AlignCenter)
@@ -808,12 +850,22 @@ class MainWindow(QMainWindow):
             act_layout.setContentsMargins(2, 2, 2, 2)
             act_layout.setSpacing(4)
 
-            # If pending approval, show Approve & Send button
-            if status == "Pending Approval":
-                btn_approve = QPushButton("🚀 موافقة وإرسال")
-                btn_approve.setProperty("class", "Success")
-                btn_approve.clicked.connect(lambda ch, jid=job_id: self._approve_and_send_job_id(jid))
-                act_layout.addWidget(btn_approve)
+            # Determine whether this is an Email job or Website Form job
+            is_email_job = "@" in contact or method == "EMAIL"
+
+            if is_email_job:
+                btn_send = QPushButton("🚀 إرسال الإيميل")
+                btn_send.setProperty("class", "Success")
+                btn_send.setToolTip(f"إرسال التقديم والمرفقات إلى {contact}")
+                btn_send.clicked.connect(lambda ch, jid=job_id: self._approve_and_send_job_id(jid))
+                act_layout.addWidget(btn_send)
+            else:
+                btn_portal = QPushButton("🌐 موقع التقديم")
+                btn_portal.setProperty("class", "Secondary")
+                btn_portal.setStyleSheet("background-color: #0284C7; color: white;")
+                btn_portal.setToolTip("فتح صفحة التقديم في المتصفح ومجلد الـ ATS")
+                btn_portal.clicked.connect(lambda ch, jid=job_id: self._open_job_portal_action(jid))
+                act_layout.addWidget(btn_portal)
 
             # Folder button
             if folder_path and Path(folder_path).exists():
@@ -822,6 +874,14 @@ class MainWindow(QMainWindow):
                 btn_f.setToolTip("فتح مجلد التقديم")
                 btn_f.clicked.connect(lambda ch, fp=folder_path: os.startfile(fp))
                 act_layout.addWidget(btn_f)
+
+            # Delete button
+            btn_del = QPushButton("🗑️")
+            btn_del.setProperty("class", "Secondary")
+            btn_del.setStyleSheet("background-color: #991B1B; color: white;")
+            btn_del.setToolTip("حذف هذه الوظيفة من السجل")
+            btn_del.clicked.connect(lambda ch, jid=job_id: self._delete_job_action(jid))
+            act_layout.addWidget(btn_del)
 
             self.table.setCellWidget(row, 8, action_widget)
 

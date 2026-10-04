@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 class GmailService:
     def __init__(self, user: str = GMAIL_USER, app_password: str = GMAIL_APP_PASSWORD):
-        self.user = user
-        self.app_password = app_password
+        self.user = user.strip()
+        self.app_password = app_password.replace(" ", "").strip()
 
     def send_application_email(
         self,

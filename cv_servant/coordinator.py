@@ -164,9 +164,9 @@ class ApplicationCoordinator:
             return False
 
         if action == "SEND_EMAIL":
-            email_addr = job.get("application_email")
-            if not email_addr:
-                logger.error("No recipient email specified for this job.")
+            email_addr = job.get("application_email") or job.get("contact")
+            if not email_addr or "@" not in str(email_addr):
+                logger.error("No valid recipient email specified for this job.")
                 return False
 
             attachments = []
@@ -179,8 +179,8 @@ class ApplicationCoordinator:
             try:
                 success = self.mailer.send_application_email(
                     recipient_email=email_addr,
-                    subject=job.get("email_subject", "Job Application"),
-                    body_text=job.get("email_body", ""),
+                    subject=job.get("email_subject", f"Application: {job.get('job_title', 'Architect')} - Mustafa Mahmoud Shawky, PMP"),
+                    body_text=job.get("email_body", "Dear Hiring Team,\nPlease find attached my CV and application."),
                     attachment_paths=attachments,
                 )
                 if success:
@@ -198,8 +198,18 @@ class ApplicationCoordinator:
                 logger.error(f"Email dispatch error: {e}")
                 return False
 
-        elif action == "MANUAL_FOLDER":
-            self.tracker.update_job_status(job_id, "Ready for Manual Submission")
+        elif action in ["MANUAL_FOLDER", "OPEN_PORTAL"]:
+            import webbrowser
+            url = job.get("job_url") or job.get("contact", "")
+            if url and ("http://" in str(url) or "https://" in str(url)):
+                webbrowser.open(url)
+
+            folder_path = job.get("folder_path")
+            if folder_path and Path(folder_path).exists():
+                import os
+                os.startfile(str(folder_path))
+
+            self.tracker.update_job_status(job_id, "Opened Form / In Progress")
             self.gdrive.sync_tracker_to_drive()
             return True
 

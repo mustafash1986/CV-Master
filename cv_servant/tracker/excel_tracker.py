@@ -157,6 +157,20 @@ class ExcelTracker:
             wb.save(str(self.file_path))
         return found
 
+    def delete_job(self, job_id: str) -> bool:
+        """Deletes a job row from the Excel tracker."""
+        wb = openpyxl.load_workbook(str(self.file_path))
+        ws = wb.active
+        found = False
+        for row in range(2, ws.max_row + 1):
+            if str(ws.cell(row=row, column=1).value).strip() == job_id.strip():
+                ws.delete_rows(row)
+                found = True
+                break
+        if found:
+            wb.save(str(self.file_path))
+        return found
+
     def get_all_jobs(self) -> List[Dict[str, Any]]:
         """Return all tracked jobs as dictionaries."""
         wb = openpyxl.load_workbook(str(self.file_path))
