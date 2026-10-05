@@ -7,6 +7,7 @@ from typing import Any, Dict
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from cv_servant.master_profile import MASTER_PROFILE
 
 
 class WordGenerator:
@@ -172,7 +173,7 @@ class WordGenerator:
             section.left_margin = Inches(1.0)
             section.right_margin = Inches(1.0)
 
-        info = profile["personal_info"]
+        info = profile.get("personal_info") or MASTER_PROFILE.get("personal_info", {})
 
         # Sender Info
         p_head = doc.add_paragraph()

@@ -9,6 +9,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, ListFlowable, ListItem
+from cv_servant.master_profile import MASTER_PROFILE
 
 
 class PDFGenerator:
@@ -195,7 +196,7 @@ class PDFGenerator:
         )
 
         story = []
-        info = profile["personal_info"]
+        info = profile.get("personal_info") or MASTER_PROFILE.get("personal_info", {})
 
         # Header Letterhead
         story.append(Paragraph(info["full_name"], style_name))

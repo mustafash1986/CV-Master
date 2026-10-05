@@ -20,6 +20,7 @@ from cv_servant.email_service.mailer import GmailService
 from cv_servant.mobile.telegram_agent import TelegramMobileAgent
 from cv_servant.tracker.excel_tracker import ExcelTracker
 from cv_servant.tracker.gdrive_sync import GDriveSync
+from cv_servant.master_profile import MASTER_PROFILE
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,7 @@ class ApplicationCoordinator:
             "pdf_cl_path": str(pdf_cl_path),
             "docx_cv_path": str(docx_cv_path),
             "docx_cl_path": str(docx_cl_path),
+            "cover_letter": tailored_profile.get("cover_letter"),
             "email_subject": tailored_profile.get("email_subject"),
             "email_body": tailored_profile.get("email_body"),
             "employer_question_responses": tailored_profile.get("employer_question_responses", []),
@@ -480,11 +482,22 @@ class ApplicationCoordinator:
                 clean_company = self.sanitize_filename(job_data.get("company_name", "Employer"))
                 pdf_cl_path = Path(job_data.get("pdf_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.pdf"))
                 docx_cl_path = Path(job_data.get("docx_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.docx"))
+                job_data["pdf_cl_path"] = str(pdf_cl_path)
+                job_data["docx_cl_path"] = str(docx_cl_path)
+
+                render_profile = dict(MASTER_PROFILE)
+                render_profile.update(job_data)
+                render_profile["cover_letter"] = job_data.get("cover_letter", "")
+
                 try:
-                    PDFGenerator.generate_cover_letter(job_data, pdf_cl_path)
-                    WordGenerator.generate_cover_letter(job_data, docx_cl_path)
+                    PDFGenerator.generate_cover_letter(render_profile, pdf_cl_path)
+                    WordGenerator.generate_cover_letter(render_profile, docx_cl_path)
+                    logger.info(f"Successfully regenerated Cover Letter PDF: {pdf_cl_path}")
+                except PermissionError:
+                    raise PermissionError(f"الملف {pdf_cl_path.name} مفتوح حالياً في برنامج آخر (مثل Adobe Acrobat أو Word). يرجى إغلاقه أولاً حتى يتمكن البرنامج من تحديثه.")
                 except Exception as e:
-                    logger.warning(f"Failed to regenerate cover letter documents: {e}")
+                    logger.error(f"Failed to regenerate cover letter documents: {e}")
+                    raise
 
                 # Update dossier file
                 info_file = folder_path / "application_dossier.txt"
@@ -526,11 +539,22 @@ class ApplicationCoordinator:
                 clean_company = self.sanitize_filename(job_data.get("company_name", "Employer"))
                 pdf_cl_path = Path(job_data.get("pdf_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.pdf"))
                 docx_cl_path = Path(job_data.get("docx_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.docx"))
+                job_data["pdf_cl_path"] = str(pdf_cl_path)
+                job_data["docx_cl_path"] = str(docx_cl_path)
+
+                render_profile = dict(MASTER_PROFILE)
+                render_profile.update(job_data)
+                render_profile["cover_letter"] = job_data.get("cover_letter", "")
+
                 try:
-                    PDFGenerator.generate_cover_letter(job_data, pdf_cl_path)
-                    WordGenerator.generate_cover_letter(job_data, docx_cl_path)
+                    PDFGenerator.generate_cover_letter(render_profile, pdf_cl_path)
+                    WordGenerator.generate_cover_letter(render_profile, docx_cl_path)
+                    logger.info(f"Successfully updated Cover Letter PDF: {pdf_cl_path}")
+                except PermissionError:
+                    raise PermissionError(f"الملف {pdf_cl_path.name} مفتوح حالياً في برنامج آخر (مثل Adobe Acrobat أو Word). يرجى إغلاقه أولاً حتى يتمكن البرنامج من تحديثه.")
                 except Exception as e:
-                    logger.warning(f"Failed to regenerate cover letter documents: {e}")
+                    logger.error(f"Failed to regenerate cover letter documents: {e}")
+                    raise
 
                 info_file = folder_path / "application_dossier.txt"
                 if info_file.exists():
