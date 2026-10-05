@@ -29,3 +29,11 @@ client_secret*.json
 /downloads/
 /scratch/
 *.log
+data/applications/
+data/drive_backup/
+data/inbox_images/
+data/exports/
+data/portfolio/*.pdf
+*.pdf
+*.docx
+*.xlsx

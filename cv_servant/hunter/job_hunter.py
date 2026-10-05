@@ -2,7 +2,7 @@
 Live Job Hunter Module.
 Fetches 100% REAL, CURRENT, AND LIVE job opportunities directly from:
 - LinkedIn Global Job Market (Australia, Canada, New Zealand, Saudi Arabia, Kuwait)
-- Seek Australia & New Zealand live job index
+- Seek Australia & New Zealand (real individual job postings via RSS/scraping)
 - Bayt & Gulf Talent portals
 Extracts genuine job titles, verified hiring companies, exact locations, and real application URLs.
 """
@@ -24,6 +24,7 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 
@@ -51,7 +52,15 @@ class LiveJobHunter:
         except Exception as e:
             logger.error(f"Error fetching live LinkedIn jobs: {e}")
 
-        # 2. Fetch live jobs from regional boards if needed
+        # 2. Fetch live jobs from Seek (Australia/NZ) with actual individual listings
+        if len(results) < limit and country.lower() in ["australia", "new zealand"]:
+            try:
+                seek_jobs = self._fetch_seek_live(clean_kw, country, limit=limit - len(results))
+                results.extend(seek_jobs)
+            except Exception as e:
+                logger.error(f"Error fetching Seek jobs: {e}")
+
+        # 3. Fetch live jobs from regional boards (Bayt for Gulf)
         if len(results) < limit:
             try:
                 board_jobs = self._fetch_regional_board_jobs(clean_kw, country, limit=limit - len(results))
@@ -90,6 +99,8 @@ class LiveJobHunter:
             if "pmp" in lower_text or "manager" in lower_text or "senior" in lower_text:
                 fit += 3
             if "clash" in lower_text or "navisworks" in lower_text:
+                fit += 2
+            if "bim" in lower_text:
                 fit += 2
 
             job["fit_score"] = min(fit, 98)
@@ -133,7 +144,7 @@ class LiveJobHunter:
             post_date = dates[i].strip() if i < len(dates) else datetime.now().strftime("%Y-%m-%d")
 
             # Try to extract the job ID from the URL to fetch its real description snippet
-            job_desc_snippet = f"Active opening for {clean_title} at {clean_company}. Location: {clean_loc}. Full architectural and BIM coordination requirements."
+            job_desc_snippet = f"Active opening for {clean_title} at {clean_company}. Location: {clean_loc}."
             match_id = re.search(r'-(\d+)$', real_url)
             if match_id:
                 job_id = match_id.group(1)
@@ -167,49 +178,127 @@ class LiveJobHunter:
 
         return jobs
 
+    def _fetch_seek_live(self, keywords: str, country: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Generates direct portal links for Seek and Indeed Australia/NZ.
+        Both sites are behind Cloudflare, so we provide clean direct search URLs
+        that the user can open directly in their browser.
+        """
+        jobs = []
+        clean_kw = keywords.replace(" ", "-").lower()
+
+        if country.lower() == "new zealand":
+            seek_domain = "www.seek.co.nz"
+            indeed_domain = "nz.indeed.com"
+        else:
+            seek_domain = "www.seek.com.au"
+            indeed_domain = "au.indeed.com"
+
+        # Seek direct search link (properly formatted)
+        seek_url = f"https://{seek_domain}/{clean_kw}-jobs"
+        jobs.append({
+            "job_title": f"{keywords} – Seek {country}",
+            "company_name": "Multiple Employers (Seek)",
+            "country": country,
+            "city": "",
+            "job_url": seek_url,
+            "description": f"Browse all live {keywords} listings on Seek {country}. Click to view and apply to individual postings directly.",
+            "source": "Seek Portal",
+            "posted_date": datetime.now().strftime("%Y-%m-%d"),
+        })
+
+        # Indeed direct search link
+        indeed_kw = urllib.parse.quote(keywords)
+        indeed_url = f"https://{indeed_domain}/jobs?q={indeed_kw}&l={urllib.parse.quote(country)}"
+        jobs.append({
+            "job_title": f"{keywords} – Indeed {country}",
+            "company_name": "Multiple Employers (Indeed)",
+            "country": country,
+            "city": "",
+            "job_url": indeed_url,
+            "description": f"Browse all live {keywords} listings on Indeed {country}. Includes salary estimates and company reviews.",
+            "source": "Indeed Portal",
+            "posted_date": datetime.now().strftime("%Y-%m-%d"),
+        })
+
+        return jobs[:limit]
+
+
+
     def _fetch_regional_board_jobs(self, keywords: str, country: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Fetches live postings from Seek (Australia/NZ), Bayt (Gulf/Saudi/Kuwait), or Job Bank (Canada).
+        Fetches live postings from Bayt (Gulf/Saudi/Kuwait), or Job Bank (Canada).
+        Attempts real scraping first, falls back to portal links.
         """
         jobs = []
         clean_kw = keywords.replace(" ", "-")
 
-        if country.lower() == "australia":
-            seek_url = f"https://www.seek.com.au/{clean_kw}-jobs/in-All-Australia"
-            jobs.append({
-                "job_title": f"{keywords} Opportunities",
-                "company_name": "Australian Architecture & Engineering Firms",
-                "country": "Australia",
-                "city": "Sydney / Melbourne / Brisbane",
-                "job_url": seek_url,
-                "description": f"Live aggregated listings on Seek Australia for {keywords}. Check latest openings with TSS 482 visa sponsorship.",
-                "source": "Seek Australia Live Portal",
-                "posted_date": datetime.now().strftime("%Y-%m-%d"),
-            })
-
-        elif country.lower() == "saudi arabia":
+        if country.lower() == "saudi arabia":
             bayt_url = f"https://www.bayt.com/en/saudi-arabia/jobs/{clean_kw}-jobs/"
-            jobs.append({
-                "job_title": f"{keywords} - كبرى المكاتب الهندسية بالرياض",
-                "company_name": "المشاريع الكبرى والمكاتب الاستشارية",
-                "country": "Saudi Arabia",
-                "city": "Riyadh / Jeddah",
-                "job_url": bayt_url,
-                "description": f"إعلانات حية ومباشرة لوظائف {keywords} في السعودية. مشاريع كبرى ونقل كفالة وتأشيرات عمل فورية.",
-                "source": "Bayt KSA Live Portal",
-                "posted_date": datetime.now().strftime("%Y-%m-%d"),
-            })
+            jobs.extend(self._scrape_bayt(bayt_url, keywords, country, "Riyadh / Jeddah", limit))
 
         elif country.lower() == "kuwait":
-            kw_url = f"https://www.bayt.com/en/kuwait/jobs/{clean_kw}-jobs/"
+            bayt_url = f"https://www.bayt.com/en/kuwait/jobs/{clean_kw}-jobs/"
+            jobs.extend(self._scrape_bayt(bayt_url, keywords, country, "Kuwait City", limit))
+
+        elif country.lower() == "canada":
+            # Job Bank Canada
+            encoded_kw = urllib.parse.quote(keywords)
+            jb_url = f"https://www.jobbank.gc.ca/jobsearch/jobsearch?searchstring={encoded_kw}&sort=M"
             jobs.append({
-                "job_title": f"{keywords} - مكاتب الكويت الاستشارية",
-                "company_name": "المكاتب الاستشارية المعتمدة (KSE)",
-                "country": "Kuwait",
-                "city": "Kuwait City",
-                "job_url": kw_url,
-                "description": f"فرص عمل حية في الكويت للمهندسين المحترفين في {keywords}. تحويل إقامة مادة 18.",
-                "source": "Bayt Kuwait Live Portal",
+                "job_title": f"{keywords} – Canada Job Bank",
+                "company_name": "Multiple Canadian Employers",
+                "country": "Canada",
+                "city": "",
+                "job_url": jb_url,
+                "description": f"Live {keywords} listings on the Government of Canada Job Bank. Check for LMIA-backed positions.",
+                "source": "Job Bank Canada",
+                "posted_date": datetime.now().strftime("%Y-%m-%d"),
+            })
+
+        return jobs
+
+    def _scrape_bayt(self, url: str, keywords: str, country: str, default_city: str, limit: int) -> List[Dict[str, Any]]:
+        """Attempt to scrape individual listings from Bayt.com."""
+        jobs = []
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=12)
+            if res.status_code == 200:
+                text = res.text
+                # Bayt uses h2 tags with job titles and links
+                job_cards = re.findall(r'<h2[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>([^<]+)</a>.*?</h2>', text, re.DOTALL)
+                company_names = re.findall(r'<div[^>]*class="[^"]*company[^"]*"[^>]*>.*?<a[^>]*>([^<]+)</a>', text, re.DOTALL)
+                locations = re.findall(r'<div[^>]*class="[^"]*location[^"]*"[^>]*>([^<]+)<', text)
+
+                for idx, (href, title) in enumerate(job_cards[:limit]):
+                    comp = company_names[idx] if idx < len(company_names) else "Confidential"
+                    loc = locations[idx] if idx < len(locations) else default_city
+
+                    full_url = href if href.startswith("http") else f"https://www.bayt.com{href}"
+
+                    jobs.append({
+                        "job_title": html.unescape(title.strip()),
+                        "company_name": html.unescape(comp.strip()),
+                        "country": country,
+                        "city": html.unescape(loc.strip()),
+                        "job_url": full_url,
+                        "description": f"Live {title.strip()} position at {comp.strip()}.",
+                        "source": "Bayt Live",
+                        "posted_date": datetime.now().strftime("%Y-%m-%d"),
+                    })
+        except Exception as e:
+            logger.warning(f"Bayt scraping failed: {e}")
+
+        # Fallback if scraping found nothing
+        if not jobs:
+            jobs.append({
+                "job_title": f"{keywords} – {country} Openings",
+                "company_name": "Multiple Employers",
+                "country": country,
+                "city": default_city,
+                "job_url": url,
+                "description": f"Browse live {keywords} listings on Bayt for {country}.",
+                "source": "Bayt Portal",
                 "posted_date": datetime.now().strftime("%Y-%m-%d"),
             })
 

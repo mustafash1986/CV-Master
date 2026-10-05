@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 from typing import Any, Dict, Optional
 
-from cv_servant.ai.ats_tailor import ATSTailor
+from cv_servant.ai.ats_tailor import ATSTailor, validate_and_sanitize_answer, answer_employer_question
 from cv_servant.ai.job_analyzer import JobAnalyzer
 from cv_servant.ai.ocr_engine import OCREngine
 from cv_servant.ai.ollama_client import OllamaClient
@@ -81,13 +81,40 @@ class ApplicationCoordinator:
             f.write(f"JOB APPLICATION DOSSIER\n")
             f.write(f"=======================\n")
             f.write(f"Company: {analysis.get('company_name')}\n")
+            f.write(f"Contact Person: {analysis.get('contact_person', '')}\n")
+            f.write(f"Contact Phone: {analysis.get('contact_phone', '')}\n")
             f.write(f"Title: {analysis.get('job_title')}\n")
             f.write(f"Country: {analysis.get('country')}\n")
+            f.write(f"City: {analysis.get('city', '')}\n")
+            f.write(f"Salary Range: {analysis.get('salary_range', 'Not Disclosed')}\n")
             f.write(f"Visa Sponsorship: {analysis.get('visa_sponsorship')} - {analysis.get('sponsorship_notes')}\n")
             f.write(f"Application Email: {analysis.get('application_email')}\n")
             f.write(f"Job URL: {analysis.get('job_url', '')}\n")
             f.write(f"Portfolio Website: https://mustafash1986.github.io/mustafa-portfolio1/\n")
-            f.write(f"Fit Score: {analysis.get('fit_score')}%\n\n")
+            f.write(f"Fit Score: {analysis.get('fit_score')}%\n")
+            f.write(f"Fit Rationale: {analysis.get('fit_rationale', '')}\n\n")
+
+            # Key Requirements extracted from the job posting
+            key_reqs = analysis.get('key_requirements', [])
+            if key_reqs:
+                f.write(f"KEY REQUIREMENTS (from Job Posting):\n")
+                for req in key_reqs:
+                    f.write(f"  • {req}\n")
+                f.write(f"\n")
+
+            # Employer Questions & Answers
+            eq_responses = tailored_profile.get('employer_question_responses', [])
+            if eq_responses:
+                f.write(f"EMPLOYER QUESTIONS & ANSWERS:\n")
+                f.write(f"=============================\n")
+                for eq in eq_responses:
+                    if isinstance(eq, dict):
+                        f.write(f"Q: {eq.get('question', '')}\n")
+                        f.write(f"A: {eq.get('answer', '')}\n\n")
+                    elif isinstance(eq, str):
+                        f.write(f"• {eq}\n")
+                f.write(f"\n")
+
             f.write(f"EMAIL SUBJECT:\n{tailored_profile.get('email_subject')}\n\n")
             f.write(f"EMAIL BODY:\n{tailored_profile.get('email_body')}\n\n")
             f.write(f"COVER LETTER:\n{tailored_profile.get('cover_letter')}\n\n")
@@ -96,6 +123,8 @@ class ApplicationCoordinator:
         job_url_val = analysis.get("job_url", "")
         job_record = {
             "company_name": analysis.get("company_name"),
+            "contact_person": analysis.get("contact_person", ""),
+            "contact_phone": analysis.get("contact_phone", ""),
             "job_title": analysis.get("job_title"),
             "country": analysis.get("country"),
             "city": analysis.get("city"),
@@ -112,6 +141,7 @@ class ApplicationCoordinator:
             "docx_cl_path": str(docx_cl_path),
             "email_subject": tailored_profile.get("email_subject"),
             "email_body": tailored_profile.get("email_body"),
+            "employer_question_responses": tailored_profile.get("employer_question_responses", []),
             "fit_score": analysis.get("fit_score", 90),
         }
 
@@ -172,9 +202,11 @@ class ApplicationCoordinator:
             return False
 
         if action == "SEND_EMAIL":
-            email_addr = job.get("application_email") or job.get("contact")
-            if not email_addr or "@" not in str(email_addr):
+            raw_email = str(job.get("application_email") or job.get("contact") or "")
+            email_addr = raw_email.strip().strip(".,;:<>\"'()[]{} \t\r\n")
+            if not email_addr or "@" not in email_addr:
                 logger.error("No valid recipient email specified for this job.")
+                self.last_error = f"عنوان البريد الإلكتروني غير صالح: '{raw_email}'"
                 return False
 
             folder_path = Path(job.get("folder_path", "")) if job.get("folder_path") else None
@@ -219,11 +251,27 @@ class ApplicationCoordinator:
             # 3. If still empty, build high-impact executive summary from Master Profile
             if not body_text or len(body_text.strip()) < 50:
                 title = job.get("job_title", "Senior Architect & BIM Specialist")
-                company = job.get("company_name", "Hiring Team")
+                raw_company = (job.get("company_name") or "").strip()
+                contact = (job.get("contact_person") or "").strip()
                 country = job.get("country", "")
                 loc_str = f" in {country}" if country and country != "N/A" else ""
+
+                company = raw_company
+                if company.lower() in [
+                    "confidential", "confidential / not disclosed", "not disclosed",
+                    "target employer", "prospective employer", "unknown", "hiring team"
+                ]:
+                    company = ""
+
+                if contact:
+                    salutation = f"Dear {contact},"
+                elif company:
+                    salutation = f"Dear {company} Hiring Team,"
+                else:
+                    salutation = "Dear Hiring Manager,"
+
                 body_text = (
-                    f"Dear Hiring Team at {company},\n\n"
+                    f"{salutation}\n\n"
                     f"I am writing to formally submit my application for the {title} position{loc_str}.\n\n"
                     f"With over 19 years of distinguished architectural engineering and BIM management experience, "
                     f"I specialize in Revit modeling, inter-discipline clash detection (Navisworks), and custom workflow automation "
@@ -246,6 +294,19 @@ class ApplicationCoordinator:
                     f"LinkedIn: linkedin.com/in/mostafamahmoud-architect"
                 )
 
+            # Sanitize any legacy bad greetings in body_text
+            for bad_sal in [
+                "Dear Hiring Team at Confidential", "Dear Hiring Team at Not Disclosed",
+                "Dear Hiring Team at Prospective Employer", "Dear Hiring Team at Confidential / Not Disclosed"
+            ]:
+                if bad_sal in body_text:
+                    contact = (job.get("contact_person") or "").strip()
+                    comp = (job.get("company_name") or "").strip()
+                    if comp.lower() in ["confidential", "confidential / not disclosed", "not disclosed", "target employer", "prospective employer", "unknown"]:
+                        comp = ""
+                    clean_greeting = f"Dear {contact}," if contact else (f"Dear {comp} Hiring Team," if comp else "Dear Hiring Manager,")
+                    body_text = body_text.replace(bad_sal, clean_greeting)
+
             # Ensure portfolio link is included if body was generated by LLM
             portfolio_link = "🌐 Interactive Online Portfolio: https://mustafash1986.github.io/mustafa-portfolio1/"
             if "mustafa-portfolio1" not in body_text:
@@ -255,6 +316,79 @@ class ApplicationCoordinator:
                     body_text = body_text.replace("Best regards,", f"{portfolio_link}\n\nBest regards,")
                 else:
                     body_text += f"\n\n{portfolio_link}"
+
+            # Ensure employer questions & answers are sanitized and included in body_text
+            country = job.get("country", "Australia")
+            raw_eq_list = job.get("employer_question_responses", [])
+            sanitized_eq = []
+            for item in raw_eq_list:
+                if isinstance(item, dict):
+                    q = item.get("question", "")
+                    a = item.get("answer", "")
+                    sanitized_eq.append({
+                        "question": q,
+                        "answer": validate_and_sanitize_answer(q, a, country)
+                    })
+                elif isinstance(item, str):
+                    sanitized_eq.append({
+                        "question": item,
+                        "answer": answer_employer_question(item, country)
+                    })
+            eq_list = sanitized_eq
+            job["employer_question_responses"] = eq_list
+
+            if eq_list:
+                eq_block = "\n\n" + "=" * 48 + "\nEMPLOYER SCREENING QUESTIONS & RESPONSES:\n" + "=" * 48 + "\n"
+                for item in eq_list:
+                    eq_block += f"\nQ: {item.get('question', '')}\nA: {item.get('answer', '')}\n"
+
+                # Check if body_text has old/bad screening question block or if missing
+                has_bad_eq = False
+                if "EMPLOYER SCREENING QUESTIONS" in body_text:
+                    if re.search(r"Security Clearance\??\s*\n\s*A:\s*Yes", body_text, re.IGNORECASE) or \
+                       re.search(r"notice.*?\??\s*\n\s*A:\s*Yes,\s*with over 19 years", body_text, re.IGNORECASE) or \
+                       "fully meeting and exceeding this requirement" in body_text:
+                        has_bad_eq = True
+                        body_text = re.sub(
+                            r"={30,}\s*\n\s*EMPLOYER SCREENING QUESTIONS & RESPONSES:.*?(?=\n\n(?:Attached|Please find|Best regards|Sincerely|🌐)|\Z)",
+                            "",
+                            body_text,
+                            flags=re.DOTALL
+                        ).strip()
+
+                if "EMPLOYER SCREENING QUESTIONS" not in body_text or has_bad_eq:
+                    if "Attached you will find" in body_text:
+                        body_text = body_text.replace("Attached you will find", f"{eq_block}\nAttached you will find")
+                    elif "Please find attached" in body_text:
+                        body_text = body_text.replace("Please find attached", f"{eq_block}\nPlease find attached")
+                    elif "Best regards," in body_text:
+                        body_text = body_text.replace("Best regards,", f"{eq_block}\nBest regards,")
+                    elif "Sincerely," in body_text:
+                        body_text = body_text.replace("Sincerely,", f"{eq_block}\nSincerely,")
+                    else:
+                        body_text += f"\n{eq_block}"
+            else:
+                # When no employer questions exist, strictly ensure no screening question block appears
+                if "EMPLOYER SCREENING QUESTIONS" in body_text:
+                    body_text = re.sub(
+                        r"={30,}\s*\n\s*EMPLOYER SCREENING QUESTIONS & RESPONSES:.*?(?=\n\n(?:Attached|Please find|Best regards|Sincerely|🌐)|\Z)",
+                        "",
+                        body_text,
+                        flags=re.DOTALL
+                    ).strip()
+
+            # Ensure complete sign-off in body_text
+            if "Mustafa Mahmoud Shawky" not in body_text:
+                portfolio_str = "🌐 Interactive Online Portfolio: https://mustafash1986.github.io/mustafa-portfolio1/\n\n" if "mustafash1986" not in body_text else ""
+                body_text += (
+                    f"\n\n{portfolio_str}"
+                    "Best regards,\n"
+                    "Mustafa Mahmoud Shawky\n"
+                    "Senior Architect & BIM Specialist / Manager\n"
+                    "+965 9919 1358\n"
+                    "arch.mustafa.mahmoud.2007@gmail.com\n"
+                    "linkedin.com/in/mostafamahmoud-architect"
+                )
 
             # Send Email via Gmail
             try:
@@ -279,6 +413,7 @@ class ApplicationCoordinator:
                     return True
             except Exception as e:
                 logger.error(f"Email dispatch error: {e}")
+                self.last_error = str(e)
                 return False
 
         elif action in ["MANUAL_FOLDER", "OPEN_PORTAL"]:
@@ -312,3 +447,105 @@ class ApplicationCoordinator:
             return True
 
         return False
+
+    def refine_job_package(self, job_data: Dict[str, Any], user_instruction: str) -> Dict[str, Any]:
+        """Refines cover letter, email body, updates files and regenerates PDF."""
+        current_cl = job_data.get("cover_letter", "")
+        current_eb = job_data.get("email_body", "")
+        current_sub = job_data.get("email_subject", "")
+
+        refined = self.tailor.refine_cover_letter_and_email(
+            job_data=job_data,
+            current_cover_letter=current_cl,
+            current_email_body=current_eb,
+            current_email_subject=current_sub,
+            user_instruction=user_instruction,
+        )
+
+        job_data["cover_letter"] = refined.get("cover_letter", current_cl)
+        job_data["email_body"] = refined.get("email_body", current_eb)
+        job_data["email_subject"] = refined.get("email_subject", current_sub)
+
+        job_id = job_data.get("job_id")
+        if job_id and job_id in self.cached_jobs:
+            self.cached_jobs[job_id]["cover_letter"] = job_data["cover_letter"]
+            self.cached_jobs[job_id]["email_body"] = job_data["email_body"]
+            self.cached_jobs[job_id]["email_subject"] = job_data["email_subject"]
+
+        # Update saved files in job folder if folder exists
+        folder_path_str = job_data.get("folder_path")
+        if folder_path_str:
+            folder_path = Path(folder_path_str)
+            if folder_path.exists():
+                clean_company = self.sanitize_filename(job_data.get("company_name", "Employer"))
+                pdf_cl_path = Path(job_data.get("pdf_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.pdf"))
+                docx_cl_path = Path(job_data.get("docx_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.docx"))
+                try:
+                    PDFGenerator.generate_cover_letter(job_data, pdf_cl_path)
+                    WordGenerator.generate_cover_letter(job_data, docx_cl_path)
+                except Exception as e:
+                    logger.warning(f"Failed to regenerate cover letter documents: {e}")
+
+                # Update dossier file
+                info_file = folder_path / "application_dossier.txt"
+                if info_file.exists():
+                    try:
+                        content = info_file.read_text(encoding="utf-8")
+                        if "EMAIL SUBJECT:" in content:
+                            prefix = content.split("EMAIL SUBJECT:")[0]
+                            new_content = (
+                                f"{prefix}"
+                                f"EMAIL SUBJECT:\n{job_data.get('email_subject')}\n\n"
+                                f"EMAIL BODY:\n{job_data.get('email_body')}\n\n"
+                                f"COVER LETTER:\n{job_data.get('cover_letter')}\n\n"
+                            )
+                            info_file.write_text(new_content, encoding="utf-8")
+                    except Exception as e:
+                        logger.warning(f"Failed to update dossier file: {e}")
+
+        return job_data
+
+    def update_job_texts_manually(self, job_data: Dict[str, Any], new_subject: str, new_email_body: str, new_cover_letter: Optional[str] = None) -> Dict[str, Any]:
+        """Saves user manual edits to email and cover letter, regenerating documents."""
+        job_data["email_subject"] = new_subject
+        job_data["email_body"] = new_email_body
+        if new_cover_letter:
+            job_data["cover_letter"] = new_cover_letter
+
+        job_id = job_data.get("job_id")
+        if job_id and job_id in self.cached_jobs:
+            self.cached_jobs[job_id]["email_subject"] = new_subject
+            self.cached_jobs[job_id]["email_body"] = new_email_body
+            if new_cover_letter:
+                self.cached_jobs[job_id]["cover_letter"] = new_cover_letter
+
+        folder_path_str = job_data.get("folder_path")
+        if folder_path_str:
+            folder_path = Path(folder_path_str)
+            if folder_path.exists():
+                clean_company = self.sanitize_filename(job_data.get("company_name", "Employer"))
+                pdf_cl_path = Path(job_data.get("pdf_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.pdf"))
+                docx_cl_path = Path(job_data.get("docx_cl_path") or (folder_path / f"Cover_Letter_{clean_company}.docx"))
+                try:
+                    PDFGenerator.generate_cover_letter(job_data, pdf_cl_path)
+                    WordGenerator.generate_cover_letter(job_data, docx_cl_path)
+                except Exception as e:
+                    logger.warning(f"Failed to regenerate cover letter documents: {e}")
+
+                info_file = folder_path / "application_dossier.txt"
+                if info_file.exists():
+                    try:
+                        content = info_file.read_text(encoding="utf-8")
+                        if "EMAIL SUBJECT:" in content:
+                            prefix = content.split("EMAIL SUBJECT:")[0]
+                            new_content = (
+                                f"{prefix}"
+                                f"EMAIL SUBJECT:\n{job_data.get('email_subject')}\n\n"
+                                f"EMAIL BODY:\n{job_data.get('email_body')}\n\n"
+                                f"COVER LETTER:\n{job_data.get('cover_letter', '')}\n\n"
+                            )
+                            info_file.write_text(new_content, encoding="utf-8")
+                    except Exception as e:
+                        logger.warning(f"Failed to update dossier file: {e}")
+
+        return job_data

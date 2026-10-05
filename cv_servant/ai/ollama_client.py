@@ -39,8 +39,11 @@ class OllamaClient:
         system: Optional[str] = None,
         model: Optional[str] = None,
         format_json: bool = False,
-        temperature: float = 0.3,
+        temperature: float = 0.2,
         timeout: int = 120,
+        num_ctx: int = 8192,
+        num_predict: int = 4096,
+        think: bool = False,
     ) -> str:
         """Generate text using local model."""
         target_model = model or self.text_model
@@ -48,8 +51,14 @@ class OllamaClient:
             "model": target_model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": temperature},
+            "options": {
+                "temperature": temperature,
+                "num_ctx": num_ctx,
+                "num_predict": num_predict,
+            },
         }
+        if not think:
+            payload["think"] = False
         if system:
             payload["system"] = system
         if format_json:
@@ -63,7 +72,11 @@ class OllamaClient:
             )
             res.raise_for_status()
             data = res.json()
-            return data.get("response", "").strip()
+            resp = data.get("response", "").strip()
+            # If response is empty but thinking contains text (fallback for reasoning models)
+            if not resp and data.get("thinking"):
+                resp = data.get("thinking", "").strip()
+            return resp
         except Exception as e:
             logger.error(f"Ollama generation failed ({target_model}): {e}")
             raise
@@ -75,6 +88,9 @@ class OllamaClient:
         system: Optional[str] = None,
         format_json: bool = False,
         timeout: int = 180,
+        num_ctx: int = 8192,
+        num_predict: int = 4096,
+        think: bool = False,
     ) -> str:
         """Analyze an image using the local vision model."""
         if not image_path.exists():
@@ -88,8 +104,14 @@ class OllamaClient:
             "prompt": prompt,
             "images": [image_b64],
             "stream": False,
-            "options": {"temperature": 0.2},
+            "options": {
+                "temperature": 0.2,
+                "num_ctx": num_ctx,
+                "num_predict": num_predict,
+            },
         }
+        if not think:
+            payload["think"] = False
         if system:
             payload["system"] = system
         if format_json:
@@ -103,7 +125,10 @@ class OllamaClient:
             )
             res.raise_for_status()
             data = res.json()
-            return data.get("response", "").strip()
+            resp = data.get("response", "").strip()
+            if not resp and data.get("thinking"):
+                resp = data.get("thinking", "").strip()
+            return resp
         except Exception as e:
             logger.error(f"Ollama vision analysis failed: {e}")
             raise

@@ -22,9 +22,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -120,13 +122,37 @@ QTableWidget {
     border-radius: 8px;
     selection-background-color: #3B82F6;
     color: #F8FAFC;
+    font-size: 13px;
+}
+QTableWidget::item {
+    padding: 8px 10px;
 }
 QHeaderView::section {
     background-color: #0F172A;
     color: #94A3B8;
     font-weight: bold;
-    padding: 8px;
+    padding: 10px 8px;
     border: 1px solid #334155;
+    font-size: 13px;
+}
+QCheckBox {
+    color: #F8FAFC;
+    font-size: 13px;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    border: 1px solid #64748B;
+    background-color: #0F172A;
+}
+QCheckBox::indicator:hover {
+    border: 1px solid #38BDF8;
+}
+QCheckBox::indicator:checked {
+    background-color: #10B981;
+    border: 1px solid #059669;
 }
 QProgressBar {
     border: 1px solid #334155;
@@ -147,6 +173,35 @@ QMessageBox QLabel {
     color: #F8FAFC !important;
     font-size: 13px;
     background-color: transparent;
+}
+/* Explicit QMenu Context Menu Styling for high-contrast dark theme */
+QMenu {
+    background-color: #1E293B;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    padding: 6px;
+    color: #F8FAFC;
+    font-size: 13px;
+}
+QMenu::item {
+    background-color: transparent;
+    padding: 8px 24px 8px 16px;
+    border-radius: 6px;
+    color: #F8FAFC;
+    font-weight: 500;
+}
+QMenu::item:selected {
+    background-color: #2563EB;
+    color: #FFFFFF;
+}
+QMenu::item:disabled {
+    color: #64748B;
+    background-color: transparent;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #334155;
+    margin: 4px 8px;
 }
 QMessageBox QPushButton {
     background-color: #2563EB;
@@ -226,6 +281,24 @@ class HunterWorker(QThread):
             self.error_signal.emit(str(e))
 
 
+class RefineJobWorker(QThread):
+    finished_signal = Signal(dict)
+    error_signal = Signal(str)
+
+    def __init__(self, coordinator: ApplicationCoordinator, job_data: dict, instruction: str):
+        super().__init__()
+        self.coordinator = coordinator
+        self.job_data = job_data
+        self.instruction = instruction
+
+    def run(self):
+        try:
+            res = self.coordinator.refine_job_package(self.job_data, self.instruction)
+            self.finished_signal.emit(res)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -235,7 +308,8 @@ class MainWindow(QMainWindow):
         self.discovered_jobs: List[Dict[str, Any]] = []
 
         self.setWindowTitle("CV Servant | خادم التوظيف الذكي للمهندس مصطفى شوقي")
-        self.resize(1220, 820)
+        self.resize(1360, 880)
+        self.setMinimumSize(1250, 750)
         self.setStyleSheet(DARK_THEME_QSS)
 
         self._build_ui()
@@ -350,12 +424,17 @@ class MainWindow(QMainWindow):
 
         # Results Table
         self.hunter_table = QTableWidget()
-        self.hunter_table.setColumnCount(7)
+        self.hunter_table.setColumnCount(8)
         self.hunter_table.setHorizontalHeaderLabels([
-            "المسمى الوظيفي", "الشركة", "الدولة / المدينة", "المصدر", "الكفالة (Sponsorship)", "درجة المطابقة", "إجراء فوري"
+            "المسمى الوظيفي", "الشركة", "الدولة / المدينة", "المصدر", "الكفالة (Sponsorship)", "درجة المطابقة", "تم التقديم ☑️", "إجراء فوري"
         ])
+        self.hunter_table.verticalHeader().setDefaultSectionSize(48)
+        self.hunter_table.verticalHeader().setVisible(True)
         self.hunter_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.hunter_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.hunter_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Fixed)
+        self.hunter_table.setColumnWidth(6, 150)
+        self.hunter_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Fixed)
+        self.hunter_table.setColumnWidth(7, 320)
         layout.addWidget(self.hunter_table)
 
     def _run_job_search(self):
@@ -379,42 +458,124 @@ class MainWindow(QMainWindow):
 
         self.hunter_table.setRowCount(len(jobs))
         for row, job in enumerate(jobs):
-            self.hunter_table.setItem(row, 0, QTableWidgetItem(job.get("job_title", "")))
-            self.hunter_table.setItem(row, 1, QTableWidgetItem(job.get("company_name", "")))
-            self.hunter_table.setItem(row, 2, QTableWidgetItem(f"{job.get('country', '')} - {job.get('city', '')}"))
-            self.hunter_table.setItem(row, 3, QTableWidgetItem(job.get("source", "")))
+            self.hunter_table.setRowHeight(row, 48)
+
+            t_item = QTableWidgetItem(job.get("job_title", ""))
+            t_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.hunter_table.setItem(row, 0, t_item)
+
+            c_item = QTableWidgetItem(job.get("company_name", ""))
+            c_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.hunter_table.setItem(row, 1, c_item)
+
+            l_item = QTableWidgetItem(f"{job.get('country', '')} - {job.get('city', '')}")
+            l_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.hunter_table.setItem(row, 2, l_item)
+
+            s_item = QTableWidgetItem(job.get("source", ""))
+            s_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            self.hunter_table.setItem(row, 3, s_item)
 
             # Sponsorship badge
             spon_item = QTableWidgetItem(job.get("visa_sponsorship", "Not Mentioned"))
             spon_item.setForeground(QColor("#10B981" if "Available" in str(spon_item.text()) else "#94A3B8"))
-            spon_item.setTextAlignment(Qt.AlignCenter)
+            spon_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
             self.hunter_table.setItem(row, 4, spon_item)
 
             # Fit score
             fit_item = QTableWidgetItem(f"{job.get('fit_score', 85)}%")
             fit_item.setForeground(QColor("#38BDF8"))
-            fit_item.setTextAlignment(Qt.AlignCenter)
+            fit_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
             self.hunter_table.setItem(row, 5, fit_item)
 
-            # Action Buttons widget
+            # Check if this job was already applied to in tracker
+            job_url = job.get("job_url", "")
+            title = job.get("job_title", "")
+            company = job.get("company_name", "")
+            existing = self.coordinator.tracker.find_job_by_url_or_title(job_url, title, company)
+            is_already_applied = bool(existing and "Applied" in str(existing.get("status", "")))
+
+            # Col 6: Interactive Checkbox for external tracking
+            chk_w = QWidget()
+            chk_lay = QHBoxLayout(chk_w)
+            chk_lay.setContentsMargins(6, 4, 6, 4)
+            chk_lay.setAlignment(Qt.AlignCenter)
+
+            chk_app = QCheckBox("تم التقديم")
+            chk_app.setToolTip("تحديد لتسجيل هذه الوظيفة في جدول الإكسيل وجوجل درايف كتقديم تم بالفعل (خارجي)")
+            if is_already_applied:
+                chk_app.setChecked(True)
+                chk_app.setText("تم التقديم ✅")
+                chk_app.setStyleSheet("color: #10B981; font-weight: bold;")
+            else:
+                chk_app.setStyleSheet("color: #94A3B8;")
+
+            chk_app.toggled.connect(lambda checked, j=job, cb=chk_app: self._on_hunter_job_applied_toggled(j, checked, cb))
+            chk_lay.addWidget(chk_app)
+            self.hunter_table.setCellWidget(row, 6, chk_w)
+
+            # Col 7: Action Buttons widget (fills cell completely with zero margins)
             act_w = QWidget()
             act_lay = QHBoxLayout(act_w)
-            act_lay.setContentsMargins(2, 2, 2, 2)
-            act_lay.setSpacing(4)
+            act_lay.setContentsMargins(0, 0, 0, 0)
+            act_lay.setSpacing(1)
 
             btn_open = QPushButton("🔗")
-            btn_open.setProperty("class", "Secondary")
-            btn_open.setStyleSheet("background-color: #0284C7; color: white; padding: 6px 10px;")
+            btn_open.setFixedWidth(44)
+            btn_open.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+            btn_open.setStyleSheet("""
+                QPushButton {
+                    background-color: #0284C7;
+                    color: white;
+                    border: none;
+                    border-radius: 0px;
+                    margin: 0px;
+                    padding: 0px;
+                    font-size: 15px;
+                }
+                QPushButton:hover {
+                    background-color: #0369A1;
+                }
+            """)
             btn_open.setToolTip("فتح إعلان الوظيفة المباشر في المتصفح")
             btn_open.clicked.connect(lambda ch, u=job.get("job_url", ""): os.system(f'start "" "{u}"') if u else None)
             act_lay.addWidget(btn_open)
 
             btn_apply = QPushButton("⚡ تفصيل الـ ATS والتقديم")
-            btn_apply.setProperty("class", "Success")
+            btn_apply.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            btn_apply.setStyleSheet("""
+                QPushButton {
+                    background-color: #059669;
+                    color: white;
+                    border: none;
+                    border-radius: 0px;
+                    margin: 0px;
+                    padding: 0px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #047857;
+                }
+            """)
             btn_apply.clicked.connect(lambda ch, j=job: self._apply_to_hunter_job(j))
-            act_lay.addWidget(btn_apply)
+            act_lay.addWidget(btn_apply, stretch=1)
 
-            self.hunter_table.setCellWidget(row, 6, act_w)
+            self.hunter_table.setCellWidget(row, 7, act_w)
+
+        self.hunter_table.setColumnWidth(6, 150)
+        self.hunter_table.setColumnWidth(7, 320)
+
+    def _on_hunter_job_applied_toggled(self, job: Dict[str, Any], is_applied: bool, checkbox: QCheckBox):
+        job_id = self.coordinator.tracker.track_external_application(job, is_applied)
+        self.coordinator.gdrive.sync_tracker_to_drive()
+        if is_applied:
+            checkbox.setText("تم التقديم ✅")
+            checkbox.setStyleSheet("color: #10B981; font-weight: bold;")
+        else:
+            checkbox.setText("غير مقدم")
+            checkbox.setStyleSheet("color: #94A3B8;")
+        self._load_tracked_jobs()
 
     def _on_hunter_error(self, err: str):
         self.hunter_progress.setVisible(False)
@@ -464,7 +625,10 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(btn_box)
 
         self.txt_job_input = QTextEdit()
+        self.txt_job_input.setAcceptRichText(False)
         self.txt_job_input.setPlaceholderText("الصق هنا تفاصيل الوظيفة أو رابط الإعلان، أو اسحب صورة الإعلان إلى هنا...")
+        self.txt_job_input.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.txt_job_input.customContextMenuRequested.connect(self._show_job_input_context_menu)
         left_layout.addWidget(self.txt_job_input)
 
         self.progress_bar = QProgressBar()
@@ -521,21 +685,82 @@ class MainWindow(QMainWindow):
 
         right_layout.addWidget(details_frame)
 
-        # Cover Letter / Summary Preview
-        right_layout.addWidget(QLabel("📝 معاينة خطاب التقديم والإيميل:"))
+        # Cover Letter / Summary Preview Header & Manual Save Button
+        prev_header_box = QHBoxLayout()
+        lbl_prev_title = QLabel("📝 خطاب التقديم والإيميل (قابل للتعديل المباشر):")
+        lbl_prev_title.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        prev_header_box.addWidget(lbl_prev_title)
+        prev_header_box.addStretch()
+
+        self.btn_save_manual = QPushButton("💾 حفظ التعديل اليدوي")
+        self.btn_save_manual.setProperty("class", "Secondary")
+        self.btn_save_manual.setEnabled(False)
+        self.btn_save_manual.setToolTip("حفظ التعديلات المكتوبة في المربع وتحديث ملفات الخطاب والـ PDF")
+        self.btn_save_manual.clicked.connect(self._save_manual_preview_edits)
+        prev_header_box.addWidget(self.btn_save_manual)
+        right_layout.addLayout(prev_header_box)
+
         self.txt_preview = QTextEdit()
-        self.txt_preview.setReadOnly(True)
+        self.txt_preview.setAcceptRichText(False)
+        self.txt_preview.setPlaceholderText("سيظهر هنا خطاب التقديم والإيميل المخصص... يمكنك التعديل المباشر عليه أو طلب تعديل بالـ AI.")
+        self.txt_preview.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.txt_preview.customContextMenuRequested.connect(self._show_preview_context_menu)
         right_layout.addWidget(self.txt_preview)
+
+        # AI Refinement Section
+        refine_frame = QFrame()
+        refine_frame.setStyleSheet("""
+            QFrame {
+                background-color: #0F172A;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+        """)
+        refine_layout = QVBoxLayout(refine_frame)
+        refine_layout.setContentsMargins(8, 8, 8, 8)
+        refine_layout.setSpacing(6)
+
+        lbl_refine = QLabel("🪄 طلب تعديل الخطاب بالذكاء الاصطناعي (Refine with AI):")
+        lbl_refine.setStyleSheet("color: #38BDF8; font-weight: bold; font-size: 12px;")
+        refine_layout.addWidget(lbl_refine)
+
+        refine_input_row = QHBoxLayout()
+        self.txt_refine_note = QLineEdit()
+        self.txt_refine_note.setPlaceholderText("اكتب ملحوظتك هنا (مثال: ركز أكثر على خبرة Navisworks وRevit، أو احذف الفقرة الأخيرة، أو خفف النبرة)...")
+        self.txt_refine_note.setStyleSheet("""
+            QLineEdit {
+                background-color: #1E293B;
+                border: 1px solid #475569;
+                border-radius: 6px;
+                padding: 8px 12px;
+                color: #F8FAFC;
+                font-size: 13px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #38BDF8;
+            }
+        """)
+        self.txt_refine_note.returnPressed.connect(self._apply_ai_refinement)
+        refine_input_row.addWidget(self.txt_refine_note, stretch=1)
+
+        self.btn_refine = QPushButton("🪄 تطبيق التعديل")
+        self.btn_refine.setEnabled(False)
+        self.btn_refine.setToolTip("تطبيق ملحوظتك وإعادة صياغة الخطاب بالذكاء الاصطناعي")
+        self.btn_refine.clicked.connect(self._apply_ai_refinement)
+        refine_input_row.addWidget(self.btn_refine)
+
+        refine_layout.addLayout(refine_input_row)
+        right_layout.addWidget(refine_frame)
 
         # Action Buttons
         act_box = QHBoxLayout()
-        self.btn_send_email = QPushButton("🚀 إرسال الإيميل مع المرفقات الآن")
+        self.btn_send_email = QPushButton("🚀 إرسال الإيميل")
         self.btn_send_email.setProperty("class", "Success")
         self.btn_send_email.setEnabled(False)
         self.btn_send_email.clicked.connect(self._send_application_email)
         act_box.addWidget(self.btn_send_email)
 
-        self.btn_open_folder = QPushButton("📁 فتح مجلد التقديم")
+        self.btn_open_folder = QPushButton("📁 مجلد التقديم")
         self.btn_open_folder.setProperty("class", "Secondary")
         self.btn_open_folder.setEnabled(False)
         self.btn_open_folder.clicked.connect(self._open_current_folder)
@@ -546,6 +771,12 @@ class MainWindow(QMainWindow):
         self.btn_open_pdf.setEnabled(False)
         self.btn_open_pdf.clicked.connect(self._open_current_pdf)
         act_box.addWidget(self.btn_open_pdf)
+
+        self.btn_open_cl_pdf = QPushButton("📑 خطاب التقديم (PDF)")
+        self.btn_open_cl_pdf.setProperty("class", "Secondary")
+        self.btn_open_cl_pdf.setEnabled(False)
+        self.btn_open_cl_pdf.clicked.connect(self._open_current_cl_pdf)
+        act_box.addWidget(self.btn_open_cl_pdf)
 
         right_layout.addLayout(act_box)
         layout.addWidget(right_card, 1)
@@ -576,13 +807,18 @@ class MainWindow(QMainWindow):
 
         # Table with Direct Approval Buttons
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels([
             "كود الوظيفة", "التاريخ", "الشركة", "المسمى الوظيفي",
-            "الدولة", "الكفالة", "طريقة التقديم", "الحالة", "الإجراء والموافقة"
+            "الدولة", "الكفالة", "طريقة التقديم", "الحالة", "تم التقديم ☑️", "الإجراء والموافقة"
         ])
+        self.table.verticalHeader().setDefaultSectionSize(48)
+        self.table.verticalHeader().setVisible(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Fixed)
+        self.table.setColumnWidth(8, 150)
+        self.table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Fixed)
+        self.table.setColumnWidth(9, 330)
         layout.addWidget(self.table)
 
     # ------------------ Tab 4: Settings & Mobile ------------------
@@ -706,6 +942,67 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "تم الحفظ", "تم حفظ الإعدادات وتحديث البرنامج بنجاح!")
 
+    # ------------------ Context Menus ------------------
+    def _show_job_input_context_menu(self, pos):
+        menu = QMenu(self)
+
+        act_paste = menu.addAction("📋 لصق الإعلان من الحافظة (Paste)")
+        act_paste.setShortcut("Ctrl+V")
+        act_paste.triggered.connect(self.txt_job_input.paste)
+
+        has_sel = self.txt_job_input.textCursor().hasSelection()
+        act_copy = menu.addAction("📄 نسخ النص المحدد (Copy)")
+        act_copy.setShortcut("Ctrl+C")
+        act_copy.setEnabled(has_sel)
+        act_copy.triggered.connect(self.txt_job_input.copy)
+
+        act_cut = menu.addAction("✂️ قص النص المحدد (Cut)")
+        act_cut.setShortcut("Ctrl+X")
+        act_cut.setEnabled(has_sel)
+        act_cut.triggered.connect(self.txt_job_input.cut)
+
+        menu.addSeparator()
+
+        act_undo = menu.addAction("↩️ تراجع (Undo)")
+        act_undo.setShortcut("Ctrl+Z")
+        act_undo.setEnabled(self.txt_job_input.document().isUndoAvailable())
+        act_undo.triggered.connect(self.txt_job_input.undo)
+
+        act_redo = menu.addAction("↪️ إعادة (Redo)")
+        act_redo.setShortcut("Ctrl+Y")
+        act_redo.setEnabled(self.txt_job_input.document().isRedoAvailable())
+        act_redo.triggered.connect(self.txt_job_input.redo)
+
+        menu.addSeparator()
+
+        has_text = bool(self.txt_job_input.toPlainText().strip())
+        act_select_all = menu.addAction("🔘 تحديد الكل (Select All)")
+        act_select_all.setShortcut("Ctrl+A")
+        act_select_all.setEnabled(has_text)
+        act_select_all.triggered.connect(self.txt_job_input.selectAll)
+
+        act_clear = menu.addAction("🗑️ مسح وتفريغ المربع (Clear All)")
+        act_clear.setEnabled(has_text)
+        act_clear.triggered.connect(self.txt_job_input.clear)
+
+        menu.exec(self.txt_job_input.mapToGlobal(pos))
+
+    def _show_preview_context_menu(self, pos):
+        menu = QMenu(self)
+        has_sel = self.txt_preview.textCursor().hasSelection()
+        act_copy = menu.addAction("📄 نسخ النص المحدد (Copy)")
+        act_copy.setShortcut("Ctrl+C")
+        act_copy.setEnabled(has_sel)
+        act_copy.triggered.connect(self.txt_preview.copy)
+
+        has_text = bool(self.txt_preview.toPlainText().strip())
+        act_select_all = menu.addAction("🔘 تحديد الكل (Select All)")
+        act_select_all.setShortcut("Ctrl+A")
+        act_select_all.setEnabled(has_text)
+        act_select_all.triggered.connect(self.txt_preview.selectAll)
+
+        menu.exec(self.txt_preview.mapToGlobal(pos))
+
     # ------------------ Core Actions & Workers ------------------
     def _select_image_ad(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -743,19 +1040,37 @@ class MainWindow(QMainWindow):
         self.btn_process.setEnabled(True)
         self.current_job = result
 
-        self.lbl_res_company.setText(result.get("company_name", "N/A"))
+        comp_display = result.get("company_name", "N/A")
+        contact_person = result.get("contact_person", "")
+        if contact_person and contact_person != comp_display:
+            comp_display = f"{comp_display} – {contact_person}"
+        self.lbl_res_company.setText(comp_display)
         self.lbl_res_title.setText(result.get("job_title", "N/A"))
         self.lbl_res_country.setText(result.get("country", "N/A"))
         self.lbl_res_sponsorship.setText(f"{result.get('visa_sponsorship')} ({result.get('sponsorship_notes', '')})")
-        self.lbl_res_email.setText(result.get("application_email") or "غير متوفر (تقديم يدوي)")
+
+        email_val = result.get("application_email") or ""
+        phone_val = result.get("contact_phone") or ""
+        contact_str = email_val
+        if phone_val:
+            contact_str += f" | 📞 {phone_val}" if contact_str else phone_val
+        self.lbl_res_email.setText(contact_str or "غير متوفر (تقديم يدوي)")
         self.lbl_res_fit.setText(f"{result.get('fit_score', 90)}%")
 
-        preview_text = f"EMAIL SUBJECT:\n{result.get('email_subject')}\n\nEMAIL BODY:\n{result.get('email_body')}"
+        preview_text = (
+            f"EMAIL SUBJECT:\n{result.get('email_subject')}\n\n"
+            f"EMAIL BODY:\n{result.get('email_body')}\n\n"
+            f"--------------------------------------------------\n"
+            f"COVER LETTER:\n{result.get('cover_letter')}"
+        )
         self.txt_preview.setText(preview_text)
 
         self.btn_send_email.setEnabled(bool(result.get("application_email")))
         self.btn_open_folder.setEnabled(bool(result.get("folder_path")))
         self.btn_open_pdf.setEnabled(bool(result.get("pdf_cv_path")))
+        self.btn_open_cl_pdf.setEnabled(bool(result.get("pdf_cl_path")))
+        self.btn_save_manual.setEnabled(True)
+        self.btn_refine.setEnabled(True)
 
         self._load_tracked_jobs()
         QMessageBox.information(self, "نجاح", "تم تجهيز حزمة الـ ATS وحفظ الملفات في مجلد الوظيفة وتحديث سجل الإكسيل والدرايف بنجاح!")
@@ -769,6 +1084,16 @@ class MainWindow(QMainWindow):
         if not self.current_job:
             return
         job_id = self.current_job.get("job_id")
+
+        # Synchronize any user edits from the preview box directly into email_body before sending
+        preview_content = self.txt_preview.toPlainText()
+        if "EMAIL BODY:" in preview_content:
+            body_part = preview_content.split("EMAIL BODY:")[1].strip()
+            if body_part:
+                self.current_job["email_body"] = body_part
+                if job_id and job_id in self.coordinator.cached_jobs:
+                    self.coordinator.cached_jobs[job_id]["email_body"] = body_part
+
         self._approve_and_send_job_id(job_id)
 
     def _approve_and_send_job_id(self, job_id: str):
@@ -779,7 +1104,7 @@ class MainWindow(QMainWindow):
                 job = j
                 break
 
-        contact = str(job.get("contact", "")) if job else ""
+        contact = str(job.get("contact", "")).strip().strip(".,;:<>\"'()[]{} \t\r\n") if job else ""
         if not contact or "@" not in contact:
             QMessageBox.warning(
                 self,
@@ -793,7 +1118,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "تم الإرسال", f"تم إرسال إيميل التقديم بنجاح إلى {contact}\nوتحديث السجل والمزامنة مع Google Drive!")
             self._load_tracked_jobs()
         else:
-            QMessageBox.warning(self, "فشل الإرسال", "لم يتم إرسال الإيميل. تحقق من إعدادات الجيميل أو اتصال الإنترنت.")
+            err = getattr(self.coordinator, "last_error", "")
+            msg = f"لم يتم إرسال الإيميل.\nالسبب:\n{err}" if err else "لم يتم إرسال الإيميل. تحقق من إعدادات الجيميل أو اتصال الإنترنت."
+            QMessageBox.warning(self, "فشل الإرسال", msg)
 
     def _open_job_portal_action(self, job_id: str):
         self.coordinator.execute_action(job_id, "OPEN_PORTAL")
@@ -828,6 +1155,101 @@ class MainWindow(QMainWindow):
             if pdf.exists():
                 os.startfile(str(pdf))
 
+    def _open_current_cl_pdf(self):
+        cl_pdf = self.current_job.get("pdf_cl_path")
+        if cl_pdf and Path(cl_pdf).exists():
+            os.startfile(str(cl_pdf))
+
+    def _save_manual_preview_edits(self):
+        if not self.current_job:
+            return
+        text = self.txt_preview.toPlainText().strip()
+        if not text:
+            return
+
+        subject = self.current_job.get("email_subject", "")
+        body = self.current_job.get("email_body", "")
+        cl = self.current_job.get("cover_letter", "")
+
+        # Extract sections if headers are present
+        if "EMAIL SUBJECT:" in text and "EMAIL BODY:" in text:
+            part1 = text.split("EMAIL SUBJECT:")[1]
+            subject_part = part1.split("EMAIL BODY:")[0].strip()
+            rest = part1.split("EMAIL BODY:")[1]
+            if "COVER LETTER:" in rest:
+                body_part = rest.split("COVER LETTER:")[0].replace("--------------------------------------------------", "").strip()
+                cl_part = rest.split("COVER LETTER:")[1].strip()
+                if cl_part:
+                    cl = cl_part
+            else:
+                body_part = rest.strip()
+            if subject_part:
+                subject = subject_part
+            if body_part:
+                body = body_part
+        elif "EMAIL BODY:" in text:
+            body = text.split("EMAIL BODY:")[1].strip()
+        else:
+            body = text
+
+        self.current_job = self.coordinator.update_job_texts_manually(
+            job_data=self.current_job,
+            new_subject=subject,
+            new_email_body=body,
+            new_cover_letter=cl
+        )
+        QMessageBox.information(
+            self,
+            "تم حفظ التعديل",
+            "تم حفظ التعديلات اليدوية وتحديث ملفات الخطاب والإيميل وملف الـ PDF بنجاح!"
+        )
+
+    def _apply_ai_refinement(self):
+        if not self.current_job:
+            QMessageBox.warning(self, "تنبيه", "يرجى تجهيز حزمة وظيفة أولاً لتعديلها.")
+            return
+
+        instruction = self.txt_refine_note.text().strip()
+        if not instruction:
+            QMessageBox.warning(self, "تنبيه", "يرجى كتابة الملحوظة أو التعديل المطلوب أولاً.")
+            return
+
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.btn_refine.setEnabled(False)
+        self.btn_save_manual.setEnabled(False)
+
+        self.refine_worker = RefineJobWorker(self.coordinator, self.current_job, instruction)
+        self.refine_worker.finished_signal.connect(self._on_refinement_success)
+        self.refine_worker.error_signal.connect(self._on_refinement_error)
+        self.refine_worker.start()
+
+    def _on_refinement_success(self, updated_job: dict):
+        self.progress_bar.setVisible(False)
+        self.btn_refine.setEnabled(True)
+        self.btn_save_manual.setEnabled(True)
+        self.current_job = updated_job
+
+        preview_text = (
+            f"EMAIL SUBJECT:\n{updated_job.get('email_subject')}\n\n"
+            f"EMAIL BODY:\n{updated_job.get('email_body')}\n\n"
+            f"--------------------------------------------------\n"
+            f"COVER LETTER:\n{updated_job.get('cover_letter')}"
+        )
+        self.txt_preview.setText(preview_text)
+        self.txt_refine_note.clear()
+        QMessageBox.information(
+            self,
+            "تم التعديل بالذكاء الاصطناعي",
+            "تم تطبيق ملحوظتك وإعادة صياغة الخطاب والإيميل وتحديث ملفات الـ PDF بنجاح!"
+        )
+
+    def _on_refinement_error(self, err_msg: str):
+        self.progress_bar.setVisible(False)
+        self.btn_refine.setEnabled(True)
+        self.btn_save_manual.setEnabled(True)
+        QMessageBox.critical(self, "خطأ في التعديل", f"تعذر تطبيق التعديل:\n{err_msg}")
+
     def _open_excel_file(self):
         if EXCEL_TRACKER_PATH.exists():
             os.startfile(str(EXCEL_TRACKER_PATH))
@@ -841,64 +1263,192 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(len(valid_jobs))
 
         for row, job in enumerate(valid_jobs):
+            self.table.setRowHeight(row, 48)
             job_id = str(job.get("job_id", ""))
             status = str(job.get("status", ""))
             method = str(job.get("application_method", ""))
-            contact = str(job.get("contact", ""))
+            contact = str(job.get("contact", "")).strip().strip(".,;:<>\"'()[]{} \t\r\n")
             folder_path = job.get("folder_path", "")
 
-            self.table.setItem(row, 0, QTableWidgetItem(job_id))
-            self.table.setItem(row, 1, QTableWidgetItem(str(job.get("date_detected", ""))))
-            self.table.setItem(row, 2, QTableWidgetItem(str(job.get("company_name", ""))))
-            self.table.setItem(row, 3, QTableWidgetItem(str(job.get("job_title", ""))))
-            self.table.setItem(row, 4, QTableWidgetItem(str(job.get("country", ""))))
-            self.table.setItem(row, 5, QTableWidgetItem(str(job.get("visa_sponsorship", ""))))
-            self.table.setItem(row, 6, QTableWidgetItem(method or ("EMAIL" if "@" in contact else "WEBSITE_FORM")))
+            it0 = QTableWidgetItem(job_id)
+            it0.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            self.table.setItem(row, 0, it0)
+
+            it1 = QTableWidgetItem(str(job.get("date_detected", "")))
+            it1.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            self.table.setItem(row, 1, it1)
+
+            it2 = QTableWidgetItem(str(job.get("company_name", "")))
+            it2.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.table.setItem(row, 2, it2)
+
+            it3 = QTableWidgetItem(str(job.get("job_title", "")))
+            it3.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.table.setItem(row, 3, it3)
+
+            it4 = QTableWidgetItem(str(job.get("country", "")))
+            it4.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            self.table.setItem(row, 4, it4)
+
+            it5 = QTableWidgetItem(str(job.get("visa_sponsorship", "")))
+            it5.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            self.table.setItem(row, 5, it5)
+
+            it6 = QTableWidgetItem(method or ("EMAIL" if "@" in contact else "WEBSITE_FORM"))
+            it6.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            self.table.setItem(row, 6, it6)
 
             status_item = QTableWidgetItem(status)
-            status_item.setTextAlignment(Qt.AlignCenter)
+            status_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            if "Interview" in status:
+                status_item.setForeground(QColor("#06B6D4"))
+            elif "Rejected" in status:
+                status_item.setForeground(QColor("#EF4444"))
+            elif "Under Review" in status or "Received" in status:
+                status_item.setForeground(QColor("#38BDF8"))
+            elif "Applied" in status or "Sent" in status:
+                status_item.setForeground(QColor("#10B981"))
+            elif "Pending" in status:
+                status_item.setForeground(QColor("#F59E0B"))
             self.table.setItem(row, 7, status_item)
 
-            # Action Buttons cell
+            # Col 8: Applied CheckBox for tracking manual/external applications
+            chk_w = QWidget()
+            chk_lay = QHBoxLayout(chk_w)
+            chk_lay.setContentsMargins(6, 4, 6, 4)
+            chk_lay.setAlignment(Qt.AlignCenter)
+
+            chk_app = QCheckBox("تم التقديم")
+            chk_app.setToolTip("تحديد لتحديث حالة الوظيفة في الإكسيل وجوجل درايف إلى تم التقديم (خارجي)")
+            is_applied = any(w in status for w in ["Applied", "Sent", "Under Review", "Interview", "Received"])
+            if is_applied:
+                chk_app.setChecked(True)
+                chk_app.setText("تم التقديم ✅")
+                chk_app.setStyleSheet("color: #10B981; font-weight: bold;")
+            else:
+                chk_app.setText("معلق")
+                chk_app.setStyleSheet("color: #94A3B8;")
+
+            chk_app.toggled.connect(lambda checked, jid=job_id, cb=chk_app, si=status_item: self._on_tracked_job_applied_toggled(jid, checked, cb, si))
+            chk_lay.addWidget(chk_app)
+            self.table.setCellWidget(row, 8, chk_w)
+
+            # Col 9: Action Buttons cell (fills cell completely with zero margins)
             action_widget = QWidget()
             act_layout = QHBoxLayout(action_widget)
-            act_layout.setContentsMargins(2, 2, 2, 2)
-            act_layout.setSpacing(4)
+            act_layout.setContentsMargins(0, 0, 0, 0)
+            act_layout.setSpacing(1)
 
             # Determine whether this is an Email job or Website Form job
             is_email_job = "@" in contact or method == "EMAIL"
 
             if is_email_job:
                 btn_send = QPushButton("🚀 إرسال الإيميل")
-                btn_send.setProperty("class", "Success")
+                btn_send.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                btn_send.setStyleSheet("""
+                    QPushButton {
+                        background-color: #059669;
+                        color: white;
+                        border: none;
+                        border-radius: 0px;
+                        margin: 0px;
+                        padding: 0px;
+                        font-weight: bold;
+                        font-size: 13px;
+                    }
+                    QPushButton:hover {
+                        background-color: #047857;
+                    }
+                """)
                 btn_send.setToolTip(f"إرسال التقديم والمرفقات إلى {contact}")
                 btn_send.clicked.connect(lambda ch, jid=job_id: self._approve_and_send_job_id(jid))
-                act_layout.addWidget(btn_send)
+                act_layout.addWidget(btn_send, stretch=1)
             else:
                 btn_portal = QPushButton("🌐 موقع التقديم")
-                btn_portal.setProperty("class", "Secondary")
-                btn_portal.setStyleSheet("background-color: #0284C7; color: white;")
+                btn_portal.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                btn_portal.setStyleSheet("""
+                    QPushButton {
+                        background-color: #0284C7;
+                        color: white;
+                        border: none;
+                        border-radius: 0px;
+                        margin: 0px;
+                        padding: 0px;
+                        font-weight: bold;
+                        font-size: 13px;
+                    }
+                    QPushButton:hover {
+                        background-color: #0369A1;
+                    }
+                """)
                 btn_portal.setToolTip("فتح صفحة التقديم في المتصفح ومجلد الـ ATS")
                 btn_portal.clicked.connect(lambda ch, jid=job_id: self._open_job_portal_action(jid))
-                act_layout.addWidget(btn_portal)
+                act_layout.addWidget(btn_portal, stretch=1)
 
             # Folder button
             if folder_path and Path(folder_path).exists():
                 btn_f = QPushButton("📁")
-                btn_f.setProperty("class", "Secondary")
+                btn_f.setFixedWidth(44)
+                btn_f.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+                btn_f.setStyleSheet("""
+                    QPushButton {
+                        background-color: #334155;
+                        color: white;
+                        border: none;
+                        border-radius: 0px;
+                        margin: 0px;
+                        padding: 0px;
+                        font-size: 15px;
+                    }
+                    QPushButton:hover {
+                        background-color: #475569;
+                    }
+                """)
                 btn_f.setToolTip("فتح مجلد التقديم")
                 btn_f.clicked.connect(lambda ch, fp=folder_path: os.startfile(fp))
                 act_layout.addWidget(btn_f)
 
             # Delete button
             btn_del = QPushButton("🗑️")
-            btn_del.setProperty("class", "Secondary")
-            btn_del.setStyleSheet("background-color: #991B1B; color: white;")
+            btn_del.setFixedWidth(44)
+            btn_del.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+            btn_del.setStyleSheet("""
+                QPushButton {
+                    background-color: #991B1B;
+                    color: white;
+                    border: none;
+                    border-radius: 0px;
+                    margin: 0px;
+                    padding: 0px;
+                    font-size: 15px;
+                }
+                QPushButton:hover {
+                    background-color: #B91C1C;
+                }
+            """)
             btn_del.setToolTip("حذف هذه الوظيفة من السجل")
             btn_del.clicked.connect(lambda ch, jid=job_id: self._delete_job_action(jid))
             act_layout.addWidget(btn_del)
 
-            self.table.setCellWidget(row, 8, action_widget)
+            self.table.setCellWidget(row, 9, action_widget)
+
+        self.table.setColumnWidth(8, 150)
+        self.table.setColumnWidth(9, 330)
+
+    def _on_tracked_job_applied_toggled(self, job_id: str, is_applied: bool, checkbox: QCheckBox, status_item: QTableWidgetItem):
+        new_status = "Applied (External / تم التقديم)" if is_applied else "Pending Approval"
+        self.coordinator.tracker.update_job_status(job_id, new_status)
+        self.coordinator.gdrive.sync_tracker_to_drive()
+        if is_applied:
+            checkbox.setText("تم التقديم ✅")
+            checkbox.setStyleSheet("color: #10B981; font-weight: bold;")
+            status_item.setText(new_status)
+            status_item.setForeground(QColor("#10B981"))
+        else:
+            checkbox.setText("معلق")
+            checkbox.setStyleSheet("color: #94A3B8;")
+            status_item.setText("Pending Approval")
+            status_item.setForeground(QColor("#F59E0B"))
 
     def _check_email_replies(self):
         jobs = self.coordinator.tracker.get_all_jobs()
@@ -910,7 +1460,12 @@ class MainWindow(QMainWindow):
                 )
             self.coordinator.gdrive.sync_tracker_to_drive()
             self._load_tracked_jobs()
-            QMessageBox.information(self, "تم فحص الردود", f"تم العثور على {len(replies)} ردود وتحديث السجل!")
+            details = "\n".join([f"• {r.get('company_name')}: {r.get('detected_status')} ({r.get('subject')})" for r in replies])
+            QMessageBox.information(
+                self, 
+                "تم فحص الردود بنجاح", 
+                f"تم العثور على {len(replies)} ردود وتحديث السجل وإكسيل تلقائياً:\n\n{details}"
+            )
         else:
             QMessageBox.information(self, "فحص البريد", "لا توجد ردود جديدة من الشركات في صندوق الوارد.")
 

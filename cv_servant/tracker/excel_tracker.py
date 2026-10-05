@@ -31,8 +31,12 @@ COLUMNS = [
 STATUS_COLORS = {
     "Pending Approval": "FFF3CD",   # Soft Yellow
     "Applied / Sent": "D1E7DD",     # Soft Green
+    "Applied (External / تم التقديم)": "D1E7DD",
+    "Applied (External)": "D1E7DD",
+    "Applied / Sent (External)": "D1E7DD",
     "Interview": "CFF4FC",          # Soft Cyan
     "Under Review": "E2E3E5",       # Soft Grey
+    "Application Received": "D1E7DD",
     "Rejected": "F8D7DA",           # Soft Red
 }
 
@@ -70,7 +74,7 @@ class ExcelTracker:
                 cell.border = thin_border
                 ws.column_dimensions[get_column_letter(col_num)].width = max(len(col_name) + 4, 15)
 
-            ws.row_dimensions[1].height = 28
+            ws.row_dimensions[1].height = 32
             wb.save(str(self.file_path))
 
     def add_job(self, job_data: Dict[str, Any]) -> str:
@@ -123,7 +127,7 @@ class ExcelTracker:
                     cell.fill = PatternFill(start_color=STATUS_COLORS[status_val], end_color=STATUS_COLORS[status_val], fill_type="solid")
                 cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        ws.row_dimensions[new_row_idx].height = 22
+        ws.row_dimensions[new_row_idx].height = 28
         wb.save(str(self.file_path))
         return job_id
 
@@ -140,22 +144,84 @@ class ExcelTracker:
                 if new_status in STATUS_COLORS:
                     status_cell.fill = PatternFill(start_color=STATUS_COLORS[new_status], end_color=STATUS_COLORS[new_status], fill_type="solid")
 
-                if new_status == "Applied / Sent":
-                    ws.cell(row=row, column=11).value = datetime.now().strftime("%Y-%m-%d %H:%M")
+                if "Applied" in new_status:
+                    if not ws.cell(row=row, column=11).value:
+                        ws.cell(row=row, column=11).value = datetime.now().strftime("%Y-%m-%d %H:%M")
+                elif new_status == "Pending Approval":
+                    ws.cell(row=row, column=11).value = ""
+
+                if not response_date and new_status in ["Under Review", "Interview", "Rejected", "Application Received"]:
+                    response_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
                 if response_date:
                     ws.cell(row=row, column=12).value = response_date
 
                 if notes:
-                    current_notes = ws.cell(row=row, column=14).value or ""
-                    ws.cell(row=row, column=14).value = f"{current_notes} | {notes}".strip(" | ")
+                    current_notes = str(ws.cell(row=row, column=14).value or "").strip()
+                    if notes not in current_notes:
+                        ws.cell(row=row, column=14).value = f"{current_notes} | {notes}".strip(" | ")
 
+                ws.row_dimensions[row].height = 28
                 found = True
                 break
 
         if found:
             wb.save(str(self.file_path))
         return found
+
+    def find_job_by_url_or_title(self, url: str, title: str = "", company: str = "") -> Optional[Dict[str, Any]]:
+        """Finds if a job already exists in tracker by URL or Title+Company."""
+        jobs = self.get_all_jobs()
+        clean_url = (url or "").strip().rstrip("/")
+        clean_title = (title or "").strip().lower()
+        clean_comp = (company or "").strip().lower()
+
+        for j in jobs:
+            j_url = str(j.get("contact", "")).strip().rstrip("/")
+            if clean_url and j_url and (clean_url in j_url or j_url in clean_url):
+                return j
+            if clean_title and clean_comp:
+                jt = str(j.get("job_title", "")).strip().lower()
+                jc = str(j.get("company_name", "")).strip().lower()
+                if clean_title == jt and clean_comp == jc:
+                    return j
+        return None
+
+    def track_external_application(self, job_data: Dict[str, Any], is_applied: bool = True) -> str:
+        """
+        Tracks an external job (applied on company portal, LinkedIn, or Seek).
+        If already tracked, toggles its status between 'Applied (External / تم التقديم)' and 'Pending Approval'.
+        If new and marked applied, appends it to Excel and marks it applied.
+        """
+        url = job_data.get("job_url") or job_data.get("contact", "")
+        title = job_data.get("job_title", "")
+        company = job_data.get("company_name", "")
+
+        existing = self.find_job_by_url_or_title(url, title, company)
+        if existing:
+            job_id = str(existing.get("job_id"))
+            new_status = "Applied (External / تم التقديم)" if is_applied else "Pending Approval"
+            self.update_job_status(job_id, new_status)
+            return job_id
+        else:
+            if is_applied:
+                job_record = {
+                    "company_name": company or "External Employer",
+                    "job_title": title or "BIM Specialist",
+                    "country": job_data.get("country", "Australia"),
+                    "city": job_data.get("city", ""),
+                    "application_method": f"WEBSITE_FORM ({job_data.get('source', 'External')})",
+                    "application_email": "",
+                    "job_url": url,
+                    "visa_sponsorship": job_data.get("visa_sponsorship", "Not Mentioned"),
+                    "status": "Applied (External / تم التقديم)",
+                    "applied_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "folder_path": "",
+                    "sponsorship_notes": f"External application tracked directly via {job_data.get('source', 'Web Portal')}"
+                }
+                job_id = self.add_job(job_record)
+                return job_id
+            return ""
 
     def delete_job(self, job_id: str) -> bool:
         """Deletes a job row from the Excel tracker."""
