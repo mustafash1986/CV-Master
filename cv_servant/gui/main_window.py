@@ -396,10 +396,25 @@ class MainWindow(QMainWindow):
             fit_item.setTextAlignment(Qt.AlignCenter)
             self.hunter_table.setItem(row, 5, fit_item)
 
-            # Action Button
+            # Action Buttons widget
+            act_w = QWidget()
+            act_lay = QHBoxLayout(act_w)
+            act_lay.setContentsMargins(2, 2, 2, 2)
+            act_lay.setSpacing(4)
+
+            btn_open = QPushButton("🔗")
+            btn_open.setProperty("class", "Secondary")
+            btn_open.setStyleSheet("background-color: #0284C7; color: white; padding: 6px 10px;")
+            btn_open.setToolTip("فتح إعلان الوظيفة المباشر في المتصفح")
+            btn_open.clicked.connect(lambda ch, u=job.get("job_url", ""): os.system(f'start "" "{u}"') if u else None)
+            act_lay.addWidget(btn_open)
+
             btn_apply = QPushButton("⚡ تفصيل الـ ATS والتقديم")
+            btn_apply.setProperty("class", "Success")
             btn_apply.clicked.connect(lambda ch, j=job: self._apply_to_hunter_job(j))
-            self.hunter_table.setCellWidget(row, 6, btn_apply)
+            act_lay.addWidget(btn_apply)
+
+            self.hunter_table.setCellWidget(row, 6, act_w)
 
     def _on_hunter_error(self, err: str):
         self.hunter_progress.setVisible(False)
