@@ -1138,6 +1138,58 @@ class MainWindow(QMainWindow):
         self.btn_process.setEnabled(True)
         QMessageBox.critical(self, "خطأ في المعالجة", f"حدث خطأ أثناء المعالجة:\n{err_msg}")
 
+    def _extract_preview_parts(self, text: str):
+        """
+        Safely separates Email Subject, Email Body, and Cover Letter from the preview box text.
+        Guarantees that the Cover Letter text is NEVER leaked into the email body.
+        """
+        subject = self.current_job.get("email_subject", "")
+        body = self.current_job.get("email_body", "")
+        cl = self.current_job.get("cover_letter", "")
+
+        working_text = text.strip()
+        if "EMAIL SUBJECT:" in working_text:
+            part1 = working_text.split("EMAIL SUBJECT:")[1]
+            if "EMAIL BODY:" in part1:
+                subject_part = part1.split("EMAIL BODY:")[0].strip()
+                if subject_part:
+                    subject = subject_part
+                rest = part1.split("EMAIL BODY:")[1]
+            else:
+                rest = part1
+        elif "EMAIL BODY:" in working_text:
+            rest = working_text.split("EMAIL BODY:")[1]
+        else:
+            rest = working_text
+
+        # Separate Email Body from Cover Letter
+        if "COVER LETTER:" in rest:
+            parts = rest.split("COVER LETTER:")
+            body_candidate = parts[0].replace("--------------------------------------------------", "").strip()
+            cl_candidate = parts[1].strip()
+            if body_candidate:
+                body = body_candidate
+            if cl_candidate:
+                cl = cl_candidate
+        elif "--------------------------------------------------" in rest:
+            parts = rest.split("--------------------------------------------------")
+            body_candidate = parts[0].strip()
+            if body_candidate:
+                body = body_candidate
+            if len(parts) > 1 and parts[1].strip():
+                cl = parts[1].strip()
+        else:
+            if rest.strip():
+                body = rest.strip()
+
+        # Hard safety: never allow COVER LETTER: in email body
+        if "COVER LETTER:" in body:
+            body = body.split("COVER LETTER:")[0].replace("--------------------------------------------------", "").strip()
+        if "--------------------------------------------------" in body:
+            body = body.split("--------------------------------------------------")[0].strip()
+
+        return subject, body, cl
+
     def _send_application_email(self):
         if not self.current_job:
             return
@@ -1145,12 +1197,20 @@ class MainWindow(QMainWindow):
 
         # Synchronize any user edits from the preview box directly into email_body before sending
         preview_content = self.txt_preview.toPlainText()
-        if "EMAIL BODY:" in preview_content:
-            body_part = preview_content.split("EMAIL BODY:")[1].strip()
+        if preview_content.strip():
+            subject_part, body_part, cl_part = self._extract_preview_parts(preview_content)
             if body_part:
                 self.current_job["email_body"] = body_part
                 if job_id and job_id in self.coordinator.cached_jobs:
                     self.coordinator.cached_jobs[job_id]["email_body"] = body_part
+            if subject_part:
+                self.current_job["email_subject"] = subject_part
+                if job_id and job_id in self.coordinator.cached_jobs:
+                    self.coordinator.cached_jobs[job_id]["email_subject"] = subject_part
+            if cl_part:
+                self.current_job["cover_letter"] = cl_part
+                if job_id and job_id in self.coordinator.cached_jobs:
+                    self.coordinator.cached_jobs[job_id]["cover_letter"] = cl_part
 
         self._approve_and_send_job_id(job_id)
 
@@ -1225,30 +1285,7 @@ class MainWindow(QMainWindow):
         if not text:
             return
 
-        subject = self.current_job.get("email_subject", "")
-        body = self.current_job.get("email_body", "")
-        cl = self.current_job.get("cover_letter", "")
-
-        # Extract sections if headers are present
-        if "EMAIL SUBJECT:" in text and "EMAIL BODY:" in text:
-            part1 = text.split("EMAIL SUBJECT:")[1]
-            subject_part = part1.split("EMAIL BODY:")[0].strip()
-            rest = part1.split("EMAIL BODY:")[1]
-            if "COVER LETTER:" in rest:
-                body_part = rest.split("COVER LETTER:")[0].replace("--------------------------------------------------", "").strip()
-                cl_part = rest.split("COVER LETTER:")[1].strip()
-                if cl_part:
-                    cl = cl_part
-            else:
-                body_part = rest.strip()
-            if subject_part:
-                subject = subject_part
-            if body_part:
-                body = body_part
-        elif "EMAIL BODY:" in text:
-            body = text.split("EMAIL BODY:")[1].strip()
-        else:
-            body = text
+        subject, body, cl = self._extract_preview_parts(text)
 
         self.current_job = self.coordinator.update_job_texts_manually(
             job_data=self.current_job,

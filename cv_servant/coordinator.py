@@ -334,6 +334,12 @@ class ApplicationCoordinator:
                     f"LinkedIn: linkedin.com/in/mostafamahmoud-architect"
                 )
 
+            # Absolute safety: ensure Cover Letter is never leaked into email text (it is already an attached PDF)
+            if "COVER LETTER:" in body_text:
+                body_text = body_text.split("COVER LETTER:")[0].strip()
+            if "--------------------------------------------------" in body_text:
+                body_text = body_text.split("--------------------------------------------------")[0].strip()
+
             # Sanitize any legacy bad greetings in body_text
             for bad_sal in [
                 "Dear Hiring Team at Confidential", "Dear Hiring Team at Not Disclosed",
@@ -558,6 +564,12 @@ class ApplicationCoordinator:
 
     def update_job_texts_manually(self, job_data: Dict[str, Any], new_subject: str, new_email_body: str, new_cover_letter: Optional[str] = None) -> Dict[str, Any]:
         """Saves user manual edits to email and cover letter, regenerating documents."""
+        # Ensure Cover Letter is never accidentally stored inside email_body
+        if "COVER LETTER:" in new_email_body:
+            new_email_body = new_email_body.split("COVER LETTER:")[0].replace("--------------------------------------------------", "").strip()
+        elif "--------------------------------------------------" in new_email_body:
+            new_email_body = new_email_body.split("--------------------------------------------------")[0].strip()
+
         job_data["email_subject"] = new_subject
         job_data["email_body"] = new_email_body
         if new_cover_letter:
