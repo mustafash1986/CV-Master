@@ -84,26 +84,15 @@ class LiveJobHunter:
 
             job["visa_sponsorship"] = heuristics["sponsorship_status"]
             job["detected_email"] = heuristics["detected_email"] or job.get("detected_email", "")
+            job["eligibility_gate"] = heuristics.get("eligibility_gate", {})
+            job["dimensions"] = heuristics.get("dimensions", {})
+            job["fit_score"] = heuristics.get("fit_score", 85)
+            job["fit_verdict"] = heuristics.get("fit_verdict", "Strong Fit")
 
-            # If user checked "Sponsorship Only", prioritize jobs with explicit indicators or international firms
-            if sponsorship_only and heuristics["sponsorship_status"] == "Local Only / Restricted":
+            # If user checked "Sponsorship Only", exclude jobs that categorically fail eligibility
+            if sponsorship_only and heuristics.get("eligibility_gate", {}).get("verdict") == "FAIL":
                 continue
 
-            # Compute Match Fit Score against Eng. Mustafa's 19-year profile
-            fit = 86
-            lower_text = content_to_check.lower()
-            if "revit" in lower_text:
-                fit += 4
-            if "dynamo" in lower_text or "python" in lower_text or "computational" in lower_text:
-                fit += 4
-            if "pmp" in lower_text or "manager" in lower_text or "senior" in lower_text:
-                fit += 3
-            if "clash" in lower_text or "navisworks" in lower_text:
-                fit += 2
-            if "bim" in lower_text:
-                fit += 2
-
-            job["fit_score"] = min(fit, 98)
             processed.append(job)
 
         return processed[:limit]
@@ -111,43 +100,64 @@ class LiveJobHunter:
     def _fetch_linkedin_live(self, keywords: str, country: str, limit: int = 15) -> List[Dict[str, Any]]:
         """
         Queries LinkedIn's public guest search endpoint to retrieve 100% active, real jobs.
+        Ported from the ai-job-search framework with zero credential requirement.
         """
         encoded_kw = urllib.parse.quote(keywords)
         encoded_loc = urllib.parse.quote(country)
         url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={encoded_kw}&location={encoded_loc}&start=0"
 
         jobs = []
-        res = requests.get(url, headers=HEADERS, timeout=12)
-        if res.status_code != 200:
-            logger.warning(f"LinkedIn guest search returned status {res.status_code}")
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=12)
+            if res.status_code != 200:
+                logger.warning(f"LinkedIn guest search returned status {res.status_code}")
+                return []
+            text = res.text
+        except Exception as e:
+            logger.warning(f"Failed to fetch LinkedIn jobs: {e}")
             return []
 
-        text = res.text
+        # Split into cards
+        parts = re.split(r'<li[^>]*>', text)
+        for part in parts:
+            if 'base-card' not in part:
+                continue
 
-        titles = re.findall(r'<h3 class="base-search-card__title">([^<]+)</h3>', text)
-        companies = re.findall(r'<h4 class="base-search-card__subtitle">.*?<a[^>]*>([^<]+)</a>', text, re.DOTALL)
-        if not companies:
-            companies = re.findall(r'<h4 class="base-search-card__subtitle">([^<]+)</h4>', text)
+            # ID extraction
+            id_m = re.search(r'data-entity-urn="urn:li:jobPosting:(\d+)"', part)
+            job_id = id_m.group(1) if id_m else ""
 
-        links = re.findall(r'<a class="base-card__full-link[^"]*" href="([^"?]+)', text)
-        locations = re.findall(r'<span class="job-search-card__location">([^<]+)</span>', text)
-        dates = re.findall(r'<time class="job-search-card__listdate"[^>]*>([^<]+)</time>', text)
+            # Link extraction
+            link_m = re.search(r'<a class="base-card__full-link[^"]*" href="([^"?]+)', part)
+            real_url = link_m.group(1).strip() if link_m else ""
+            if not job_id and real_url:
+                fallback_id = re.search(r'-(\d+)$', real_url)
+                if fallback_id:
+                    job_id = fallback_id.group(1)
 
-        for i in range(len(titles)):
-            if i >= len(links):
-                break
+            # Title
+            title_m = re.search(r'<h3 class="base-search-card__title">([^<]+)</h3>', part)
+            if not title_m:
+                continue
+            clean_title = html.unescape(title_m.group(1).strip())
 
-            clean_title = html.unescape(titles[i].strip())
-            clean_company = html.unescape(companies[i].strip()) if i < len(companies) else "Confidential Employer"
-            real_url = links[i].strip()
-            clean_loc = html.unescape(locations[i].strip()) if i < len(locations) else country
-            post_date = dates[i].strip() if i < len(dates) else datetime.now().strftime("%Y-%m-%d")
+            # Company
+            comp_m = re.search(r'<h4 class="base-search-card__subtitle">.*?<a[^>]*>([^<]+)</a>', part, re.DOTALL)
+            if not comp_m:
+                comp_m = re.search(r'<h4 class="base-search-card__subtitle">([^<]+)</h4>', part)
+            clean_company = html.unescape(comp_m.group(1).strip()) if comp_m else "Confidential Employer"
 
-            # Try to extract the job ID from the URL to fetch its real description snippet
+            # Location
+            loc_m = re.search(r'<span class="job-search-card__location">([^<]+)</span>', part)
+            clean_loc = html.unescape(loc_m.group(1).strip()) if loc_m else country
+
+            # Date
+            date_m = re.search(r'<time class="job-search-card__listdate"[^>]*>([^<]+)</time>', part)
+            post_date = date_m.group(1).strip() if date_m else datetime.now().strftime("%Y-%m-%d")
+
+            # Fetch rich description from public guest detail endpoint
             job_desc_snippet = f"Active opening for {clean_title} at {clean_company}. Location: {clean_loc}."
-            match_id = re.search(r'-(\d+)$', real_url)
-            if match_id:
-                job_id = match_id.group(1)
+            if job_id:
                 try:
                     desc_res = requests.get(
                         f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}",
@@ -156,9 +166,9 @@ class LiveJobHunter:
                     )
                     if desc_res.status_code == 200:
                         clean_body = re.sub(r'<[^>]+>', ' ', desc_res.text)
-                        clean_body = re.sub(r'\s+', ' ', clean_body).strip()
+                        clean_body = html.unescape(re.sub(r'\s+', ' ', clean_body).strip())
                         if len(clean_body) > 100:
-                            job_desc_snippet = clean_body[:800]
+                            job_desc_snippet = clean_body[:3500]
                 except Exception:
                     pass
 
@@ -167,7 +177,7 @@ class LiveJobHunter:
                 "company_name": clean_company,
                 "country": country,
                 "city": clean_loc,
-                "job_url": real_url,
+                "job_url": real_url or f"https://www.linkedin.com/jobs/view/{job_id}",
                 "description": job_desc_snippet,
                 "source": "LinkedIn Live",
                 "posted_date": post_date,

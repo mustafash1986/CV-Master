@@ -476,14 +476,31 @@ class MainWindow(QMainWindow):
             s_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
             self.hunter_table.setItem(row, 3, s_item)
 
-            # Sponsorship badge
-            spon_item = QTableWidgetItem(job.get("visa_sponsorship", "Not Mentioned"))
-            spon_item.setForeground(QColor("#10B981" if "Available" in str(spon_item.text()) else "#94A3B8"))
+            # Sponsorship & Eligibility Gate badge
+            gate = job.get("eligibility_gate", {})
+            g_verdict = gate.get("verdict", "")
+            spon_text = job.get("visa_sponsorship", "Not Mentioned")
+            if g_verdict == "FAIL":
+                spon_text = f"🔴 {spon_text}"
+            elif g_verdict == "PASS" or "Available" in spon_text:
+                spon_text = f"🟢 {spon_text}"
+            else:
+                spon_text = f"🟡 {spon_text}"
+            spon_item = QTableWidgetItem(spon_text)
+            if "🔴" in spon_text:
+                spon_item.setForeground(QColor("#EF4444"))
+            elif "🟢" in spon_text:
+                spon_item.setForeground(QColor("#10B981"))
+            else:
+                spon_item.setForeground(QColor("#F59E0B"))
             spon_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
             self.hunter_table.setItem(row, 4, spon_item)
 
-            # Fit score
-            fit_item = QTableWidgetItem(f"{job.get('fit_score', 85)}%")
+            # Fit score & 5D verdict
+            v_text = job.get("fit_verdict", "")
+            score_num = job.get("fit_score", 85)
+            fit_label = f"{score_num}% ({v_text})" if v_text else f"{score_num}%"
+            fit_item = QTableWidgetItem(fit_label)
             fit_item.setForeground(QColor("#38BDF8"))
             fit_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
             self.hunter_table.setItem(row, 5, fit_item)
@@ -678,10 +695,22 @@ class MainWindow(QMainWindow):
         self.lbl_res_email = QLabel("-")
         grid.addWidget(self.lbl_res_email, 4, 1)
 
-        grid.addWidget(QLabel("📊 نسبة المطابقة:"), 5, 0)
+        grid.addWidget(QLabel("📊 نسبة المطابقة (5D):"), 5, 0)
         self.lbl_res_fit = QLabel("-")
         self.lbl_res_fit.setStyleSheet("font-weight: bold; color: #10B981;")
         grid.addWidget(self.lbl_res_fit, 5, 1)
+
+        grid.addWidget(QLabel("🚪 بوابة الأهلية (Gate):"), 6, 0)
+        self.lbl_res_eligibility = QLabel("-")
+        self.lbl_res_eligibility.setStyleSheet("font-weight: bold; color: #38BDF8;")
+        self.lbl_res_eligibility.setWordWrap(True)
+        grid.addWidget(self.lbl_res_eligibility, 6, 1)
+
+        grid.addWidget(QLabel("📐 تفصيل الأبعاد الخمسة:"), 7, 0)
+        self.lbl_res_dimensions = QLabel("-")
+        self.lbl_res_dimensions.setStyleSheet("color: #E2E8F0; font-size: 11px;")
+        self.lbl_res_dimensions.setWordWrap(True)
+        grid.addWidget(self.lbl_res_dimensions, 7, 1)
 
         right_layout.addWidget(details_frame)
 
@@ -1055,7 +1084,36 @@ class MainWindow(QMainWindow):
         if phone_val:
             contact_str += f" | 📞 {phone_val}" if contact_str else phone_val
         self.lbl_res_email.setText(contact_str or "غير متوفر (تقديم يدوي)")
-        self.lbl_res_fit.setText(f"{result.get('fit_score', 90)}%")
+
+        # 5D Fit Score & Verdict
+        fit_sc = result.get("fit_score", 90)
+        fit_vd = result.get("fit_verdict", "Strong Fit")
+        self.lbl_res_fit.setText(f"{fit_sc}% • {fit_vd}")
+
+        # Eligibility Gate
+        gate = result.get("eligibility_gate", {})
+        g_verdict = gate.get("verdict", "UNVERIFIED")
+        g_notes = gate.get("notes", "")
+        if g_verdict == "PASS":
+            self.lbl_res_eligibility.setText(f"🟢 مؤهل (PASS) – {g_notes}")
+            self.lbl_res_eligibility.setStyleSheet("font-weight: bold; color: #10B981;")
+        elif g_verdict == "FAIL":
+            self.lbl_res_eligibility.setText(f"🔴 مستبعد (FAIL) – {g_notes}")
+            self.lbl_res_eligibility.setStyleSheet("font-weight: bold; color: #EF4444;")
+        else:
+            self.lbl_res_eligibility.setText(f"🟡 غير مؤكد (UNVERIFIED) – {g_notes}")
+            self.lbl_res_eligibility.setStyleSheet("font-weight: bold; color: #F59E0B;")
+
+        # 5-Dimension Scores Breakdown
+        dims = result.get("dimensions", {})
+        t_sc = dims.get("technical_score", 85)
+        e_sc = dims.get("experience_score", 85)
+        b_sc = dims.get("behavioral_score", 80)
+        c_sc = dims.get("career_score", 85)
+        l_vd = dims.get("location_verdict", "PASS")
+        self.lbl_res_dimensions.setText(
+            f"تقني: {t_sc}% (30%) | خبرة: {e_sc}% (25%) | سلوكي: {b_sc}% (15%) | مسار: {c_sc}% (30%) | موقع: {l_vd}"
+        )
 
         preview_text = (
             f"EMAIL SUBJECT:\n{result.get('email_subject')}\n\n"

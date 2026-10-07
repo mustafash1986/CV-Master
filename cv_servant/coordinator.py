@@ -92,8 +92,40 @@ class ApplicationCoordinator:
             f.write(f"Application Email: {analysis.get('application_email')}\n")
             f.write(f"Job URL: {analysis.get('job_url', '')}\n")
             f.write(f"Portfolio Website: https://mustafash1986.github.io/mustafa-portfolio1/\n")
-            f.write(f"Fit Score: {analysis.get('fit_score')}%\n")
+            fwrite_score = analysis.get('fit_score', 90)
+            fwrite_verdict = analysis.get('fit_verdict', 'Strong Fit')
+            f.write(f"Fit Score: {fwrite_score}% ({fwrite_verdict})\n")
             f.write(f"Fit Rationale: {analysis.get('fit_rationale', '')}\n\n")
+
+            # 5-Dimension Evaluation Matrix (ai-job-search framework)
+            gate = analysis.get('eligibility_gate', {})
+            dims = analysis.get('dimensions', {})
+            f.write(f"5-DIMENSION EVALUATION MATRIX:\n")
+            f.write(f"=============================\n")
+            f.write(f"Eligibility Gate: [{gate.get('verdict', 'UNVERIFIED')}] - {gate.get('notes', '')}\n")
+            f.write(f"• Technical Match (30%):   {dims.get('technical_score', 85)}/100 - {dims.get('technical_notes', '')}\n")
+            f.write(f"• Experience Match (25%):  {dims.get('experience_score', 85)}/100 - {dims.get('experience_notes', '')}\n")
+            f.write(f"• Behavioral Match (15%):  {dims.get('behavioral_score', 80)}/100 - {dims.get('behavioral_notes', '')}\n")
+            f.write(f"• Location & Logistics:    {dims.get('location_verdict', 'PASS')} - {dims.get('location_notes', '')}\n")
+            f.write(f"• Career Alignment (30%):  {dims.get('career_score', 85)}/100 - {dims.get('career_notes', '')}\n\n")
+
+            recom = analysis.get('recommendation', '')
+            if recom:
+                f.write(f"Recommendation: {recom}\n\n")
+
+            strengths = analysis.get('key_strengths', [])
+            if strengths:
+                f.write(f"Key Candidate Strengths:\n")
+                for s in strengths:
+                    f.write(f"  + {s}\n")
+                f.write(f"\n")
+
+            gaps = analysis.get('gaps_to_address', [])
+            if gaps:
+                f.write(f"Gaps to Address / Strategy:\n")
+                for g in gaps:
+                    f.write(f"  - {g}\n")
+                f.write(f"\n")
 
             # Key Requirements extracted from the job posting
             key_reqs = analysis.get('key_requirements', [])
@@ -134,6 +166,13 @@ class ApplicationCoordinator:
             "job_url": job_url_val,
             "visa_sponsorship": analysis.get("visa_sponsorship"),
             "sponsorship_notes": analysis.get("sponsorship_notes"),
+            "eligibility_gate": analysis.get("eligibility_gate", {}),
+            "dimensions": analysis.get("dimensions", {}),
+            "fit_score": analysis.get("fit_score", 90),
+            "fit_verdict": analysis.get("fit_verdict", "Strong Fit"),
+            "key_strengths": analysis.get("key_strengths", []),
+            "gaps_to_address": analysis.get("gaps_to_address", []),
+            "recommendation": analysis.get("recommendation", ""),
             "status": "Pending Approval",
             "folder_path": str(folder_path),
             "pdf_cv_path": str(pdf_cv_path),
@@ -144,7 +183,6 @@ class ApplicationCoordinator:
             "email_subject": tailored_profile.get("email_subject"),
             "email_body": tailored_profile.get("email_body"),
             "employer_question_responses": tailored_profile.get("employer_question_responses", []),
-            "fit_score": analysis.get("fit_score", 90),
         }
 
         job_id = self.tracker.add_job(job_record)
