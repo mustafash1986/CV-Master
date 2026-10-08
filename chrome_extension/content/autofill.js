@@ -1,6 +1,7 @@
 /**
  * CV Servant - Smart Job Auto-Fill & Tracker Content Script
- * High-intelligence form matching for ATS systems, job boards, and company career portals.
+ * High-intelligence form matching for Workday, Taleo, Greenhouse, Lever, LinkedIn,
+ * Seek, Indeed, and modern ATS job application portals.
  */
 
 (function () {
@@ -13,7 +14,6 @@
 
   // Initialize and sync latest profile from local server
   function init() {
-    // 1. Sync updated profile from background service worker (from local server / storage)
     try {
       chrome.runtime.sendMessage({ action: "GET_PROFILE" }, (response) => {
         if (response && response.success && response.profile) {
@@ -21,13 +21,13 @@
         }
       });
     } catch (e) {
-      // Content script context
+      // Background context check
     }
 
-    // 2. Inject floating widget if this is a job page
+    // Inject floating widget if this looks like a job page
     checkAndInjectFloatingWidget();
 
-    // 3. Listen for trigger messages from popup or background
+    // Listen for trigger messages from popup or background
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === "TRIGGER_AUTOFILL") {
         if (request.payload && request.payload.profile) {
@@ -52,8 +52,9 @@
 
     const jobDomains = [
       "linkedin.com", "indeed.com", "seek.com.au", "seek.co.nz",
-      "myworkdayjobs.com", "greenhouse.io", "lever.co", "smartrecruiters.com",
-      "workable.com", "bamboohr.com", "taleo.net", "icims.com", "ashbyhq.com"
+      "myworkdayjobs.com", "workday.com", "greenhouse.io", "lever.co",
+      "smartrecruiters.com", "workable.com", "bamboohr.com", "taleo.net",
+      "icims.com", "ashbyhq.com", "jobvite.com"
     ];
 
     const hasDomain = jobDomains.some(d => hostname.includes(d));
@@ -70,7 +71,14 @@
     let company = "";
     let location = "";
 
-    // 1. LinkedIn
+    // 1. Workday specific
+    const wdTitle = document.querySelector("[data-automation-id='jobPostingHeader'], [data-automation-id='jobTitle']");
+    if (wdTitle) title = wdTitle.innerText.trim();
+
+    const wdComp = document.querySelector("[data-automation-id='legalEntityName'], [data-automation-id='company']");
+    if (wdComp) company = wdComp.innerText.trim();
+
+    // 2. LinkedIn specific
     if (window.location.hostname.includes("linkedin.com")) {
       const titleElem = document.querySelector(".jobs-unified-top-card__job-title, .job-details-jobs-unified-top-card__job-title, h1.t-24, h1");
       if (titleElem) title = titleElem.innerText.trim();
@@ -82,14 +90,14 @@
       if (locElem) location = locElem.innerText.trim();
     }
 
-    // 2. Seek / Indeed / Workday / Greenhouse
+    // 3. General fallbacks
     if (!title) {
-      const h1 = document.querySelector("h1, [data-automation-id='jobPostingHeader'], .job-title, [data-qa='job-title']");
+      const h1 = document.querySelector("h1, .job-title, [data-qa='job-title']");
       if (h1) title = h1.innerText.trim();
     }
 
     if (!company) {
-      const compNode = document.querySelector("[data-automation-id='legalEntityName'], .company-name, .employer, [data-automation='advertiser-name'], [data-qa='company-name']");
+      const compNode = document.querySelector(".company-name, .employer, [data-automation='advertiser-name'], [data-qa='company-name']");
       if (compNode) company = compNode.innerText.trim();
     }
 
@@ -112,16 +120,17 @@
     };
   }
 
-  // Set input value cleanly with React / Vue / Angular native setter override
+  // Set input value cleanly with React / Vue / Angular / Workday native setter override
   function setNativeValue(element, value) {
     if (!element || value === undefined || value === null) return;
 
     const valueToSet = String(value);
 
-    // Focus input
-    element.focus();
+    try {
+      element.focus();
+    } catch (e) {}
 
-    // Call native setter to bypass React 16+ synthetic event suppression
+    // Call native prototype setter to bypass React 16+ / Workday synthetic event suppression
     const prototype = Object.getPrototypeOf(element);
     const nativeDescriptor = Object.getOwnPropertyDescriptor(prototype, "value");
     if (nativeDescriptor && nativeDescriptor.set) {
@@ -131,168 +140,413 @@
     }
 
     // Dispatch full cycle of synthetic events for frameworks with character limits (e.g. 0/200)
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
-    element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
-    element.dispatchEvent(new Event("blur", { bubbles: true }));
+    element.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "a" }));
+    element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "a" }));
+    element.dispatchEvent(new Event("blur", { bubbles: true, cancelable: true }));
+
+    // Visual highlight feedback
+    element.style.transition = "background-color 0.4s ease";
+    element.style.backgroundColor = "rgba(16, 185, 129, 0.18)";
   }
 
-  // Extracts contextual descriptor strings around a field
+  // Deep inspection: climbs up ancestor elements up to 8 levels to extract full context,
+  // Workday automation IDs, labels, headings, and field legends
   function getFieldContextText(field) {
-    const id = (field.id || "").toLowerCase();
-    const name = (field.name || "").toLowerCase();
-    const placeholder = (field.placeholder || "").toLowerCase();
-    const aria = (field.getAttribute("aria-label") || "").toLowerCase();
-    const autocomplete = (field.getAttribute("autocomplete") || "").toLowerCase();
-    const dataQa = (field.getAttribute("data-qa") || field.getAttribute("data-automation-id") || field.getAttribute("data-testid") || "").toLowerCase();
+    let parts = [];
 
-    // Associated label search
-    let labelText = "";
-    if (field.id) {
-      const lbl = document.querySelector(`label[for="${field.id}"]`);
-      if (lbl) labelText = lbl.innerText.toLowerCase();
-    }
-    if (!labelText && field.closest("label")) {
-      labelText = field.closest("label").innerText.toLowerCase();
-    }
+    // 1. Direct attributes of the field
+    parts.push(field.id || "");
+    parts.push(field.name || "");
+    parts.push(field.placeholder || "");
+    parts.push(field.getAttribute("aria-label") || "");
+    parts.push(field.getAttribute("autocomplete") || "");
+    parts.push(field.getAttribute("data-automation-id") || "");
+    parts.push(field.getAttribute("data-qa") || "");
+    parts.push(field.getAttribute("data-testid") || "");
+    parts.push(field.getAttribute("title") || "");
 
-    // Search parent containers (.form-group, .field, table row, section)
-    let containerText = "";
-    const parent = field.closest(".form-group, .field, .input-group, .form-row, tr, [data-automation-id], fieldset, div");
-    if (parent) {
-      const labels = parent.querySelectorAll("label, span, p, h2, h3, h4, h5, .label, .title");
-      labels.forEach((l) => {
-        // Exclude character counter text like "0/200" from descriptor text
-        const t = l.innerText.toLowerCase().trim();
-        if (!t.match(/^\d+\s*\/\s*\d+$/)) {
-          containerText += " " + t;
-        }
+    // 2. aria-labelledby and aria-describedby
+    const labelledBy = field.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      labelledBy.split(/\s+/).forEach((lblId) => {
+        const el = document.getElementById(lblId);
+        if (el) parts.push(el.innerText || "");
       });
     }
 
-    // Preceding sibling text
-    let siblingText = "";
-    let prev = field.previousElementSibling;
-    while (prev) {
-      const pt = prev.innerText ? prev.innerText.toLowerCase().trim() : "";
-      if (pt && !pt.match(/^\d+\s*\/\s*\d+$/)) {
-        siblingText += " " + pt;
-      }
-      prev = prev.previousElementSibling;
+    // 3. Associated <label for="id">
+    if (field.id) {
+      try {
+        const lbl = document.querySelector(`label[for="${CSS.escape(field.id)}"]`);
+        if (lbl) parts.push(lbl.innerText || "");
+      } catch (e) {}
     }
 
-    return `${id} ${name} ${placeholder} ${aria} ${autocomplete} ${dataQa} ${labelText} ${containerText} ${siblingText}`;
+    // 4. Ancestor climbing: Check up to 8 parent levels
+    // This solves the Workday / nested container problem where the label is in an outer wrapper
+    let curr = field.parentElement;
+    let depth = 0;
+    while (curr && depth < 8 && curr !== document.body) {
+      // Check data-automation-id on container (e.g. data-automation-id="formField-legalNameSection_firstName")
+      const autoId = curr.getAttribute("data-automation-id");
+      if (autoId) parts.push(autoId);
+
+      const qaId = curr.getAttribute("data-qa") || curr.getAttribute("data-testid");
+      if (qaId) parts.push(qaId);
+
+      // Check class name tokens
+      if (curr.className && typeof curr.className === "string") {
+        parts.push(curr.className);
+      }
+
+      // Check for labels or headings inside this container
+      const labels = curr.querySelectorAll("label, [data-automation-id='formLabel'], .label, h1, h2, h3, h4, h5, legend, p, span.title");
+      labels.forEach((lbl) => {
+        const txt = (lbl.innerText || "").trim();
+        // Ignore character counter texts like "0/200"
+        if (txt && !txt.match(/^\d+\s*\/\s*\d+$/) && txt.length < 150) {
+          parts.push(txt);
+        }
+      });
+
+      // If we hit a known major form row / field container in Workday, collect its immediate siblings then stop
+      if (autoId && (autoId.includes("formField") || autoId.includes("formGroup"))) {
+        break;
+      }
+      if (curr.classList.contains("form-group") || curr.classList.contains("field") || curr.tagName === "TR") {
+        break;
+      }
+
+      curr = curr.parentElement;
+      depth++;
+    }
+
+    // 5. Preceding sibling elements (common in table or grid layouts)
+    let prev = field.previousElementSibling;
+    let sibCount = 0;
+    while (prev && sibCount < 3) {
+      const pt = (prev.innerText || "").trim();
+      if (pt && !pt.match(/^\d+\s*\/\s*\d+$/)) {
+        parts.push(pt);
+      }
+      prev = prev.previousElementSibling;
+      sibCount++;
+    }
+
+    return parts.join(" ").toLowerCase();
   }
 
   // Matches a form field to candidate data based on its attributes and labels
   function matchFieldDescriptor(field) {
     const fullStr = getFieldContextText(field);
 
-    // 1. Name matches
-    if (fullStr.includes("first") && (fullStr.includes("name") || fullStr.includes("given") || fullStr.includes("fname"))) {
+    // 1. First Name (English + Arabic + Workday data-automation-id)
+    if (
+      fullStr.includes("first_name") ||
+      fullStr.includes("firstname") ||
+      fullStr.includes("first name") ||
+      fullStr.includes("given name") ||
+      fullStr.includes("given_name") ||
+      fullStr.includes("givenname") ||
+      fullStr.includes("fname") ||
+      fullStr.includes("legalnamesection_firstname") ||
+      fullStr.includes("الاسم الأول") ||
+      fullStr.includes("اسمك الأول")
+    ) {
       return "first_name";
     }
-    if (fullStr.includes("last") && (fullStr.includes("name") || fullStr.includes("surname") || fullStr.includes("family") || fullStr.includes("lname"))) {
+
+    // 2. Last Name / Surname (English + Arabic + Workday)
+    if (
+      fullStr.includes("last_name") ||
+      fullStr.includes("lastname") ||
+      fullStr.includes("last name") ||
+      fullStr.includes("surname") ||
+      fullStr.includes("family_name") ||
+      fullStr.includes("family name") ||
+      fullStr.includes("familyname") ||
+      fullStr.includes("lname") ||
+      fullStr.includes("legalnamesection_lastname") ||
+      fullStr.includes("اسم العائلة") ||
+      fullStr.includes("الاسم الأخير") ||
+      fullStr.includes("اللقب")
+    ) {
       return "last_name";
     }
-    if (fullStr.includes("middle") && fullStr.includes("name")) {
+
+    // 3. Middle Name
+    if (
+      fullStr.includes("middle_name") ||
+      fullStr.includes("middlename") ||
+      fullStr.includes("middle name") ||
+      fullStr.includes("legalnamesection_middlename") ||
+      fullStr.includes("الاسم الأوسط")
+    ) {
       return "middle_name";
     }
+
+    // 4. Full Name (only if not distinct first/last)
     if (
-      (fullStr.includes("full") && fullStr.includes("name")) ||
-      (fullStr.includes("candidate") && fullStr.includes("name")) ||
-      (fullStr.includes("applicant") && fullStr.includes("name")) ||
+      fullStr.includes("full_name") ||
+      fullStr.includes("fullname") ||
+      fullStr.includes("full name") ||
+      fullStr.includes("candidate name") ||
+      fullStr.includes("applicant name") ||
       fullStr.includes("your name") ||
-      field.name === "name" ||
-      field.id === "name"
+      fullStr.includes("الاسم بالكامل") ||
+      fullStr.includes("الاسم الكامل") ||
+      fullStr.includes("اسم المرشح")
     ) {
       return "full_name";
     }
 
-    // 2. Contact details
-    if (fullStr.includes("email") || fullStr.includes("e-mail") || field.type === "email") {
+    // 5. Email (English + Arabic + Workday)
+    if (
+      fullStr.includes("email") ||
+      fullStr.includes("e-mail") ||
+      field.type === "email" ||
+      fullStr.includes("البريد") ||
+      fullStr.includes("الإيميل")
+    ) {
       return "email";
     }
-    if (fullStr.includes("country code") || fullStr.includes("dial code")) {
+
+    // 6. Phone Country / Dial Code
+    if (
+      fullStr.includes("country code") ||
+      fullStr.includes("dial code") ||
+      fullStr.includes("country dial") ||
+      fullStr.includes("كود الدولة") ||
+      fullStr.includes("رمز الدولة")
+    ) {
       return "phone_country_code";
     }
+
+    // 7. Phone Device Type (Workday specific dropdown)
+    if (
+      fullStr.includes("device type") ||
+      fullStr.includes("phone device") ||
+      fullStr.includes("phone type") ||
+      fullStr.includes("نوع الهاتف")
+    ) {
+      return "phone_device_type";
+    }
+
+    // 8. Phone Number (English + Arabic + Workday)
     if (
       fullStr.includes("phone") ||
       fullStr.includes("mobile") ||
       fullStr.includes("cell") ||
       fullStr.includes("tel") ||
       fullStr.includes("contact number") ||
-      field.type === "tel"
+      field.type === "tel" ||
+      fullStr.includes("phone-number") ||
+      fullStr.includes("الهاتف") ||
+      fullStr.includes("الجوال") ||
+      fullStr.includes("الموبايل") ||
+      fullStr.includes("رقم الاتصال")
     ) {
       return "phone";
     }
 
-    // 3. Links & Portfolio
-    if (fullStr.includes("linkedin")) {
+    // 9. Links & Portfolios
+    if (fullStr.includes("linkedin") || fullStr.includes("لينكد")) {
       return "linkedin";
     }
-    if (fullStr.includes("portfolio") || fullStr.includes("website") || fullStr.includes("personal site") || fullStr.includes("web link")) {
+    if (
+      fullStr.includes("portfolio") ||
+      fullStr.includes("website") ||
+      fullStr.includes("personal site") ||
+      fullStr.includes("web link") ||
+      fullStr.includes("بورتفوليو") ||
+      fullStr.includes("معرض الأعمال") ||
+      fullStr.includes("موقعك")
+    ) {
       return "portfolio";
     }
     if (fullStr.includes("github")) {
       return "github";
     }
 
-    // 4. Address & Location
-    if (fullStr.includes("address") || fullStr.includes("street")) {
+    // 10. Address Line 1 / Street (Workday: addressSection_addressLine1)
+    if (
+      fullStr.includes("addressline1") ||
+      fullStr.includes("address line 1") ||
+      fullStr.includes("address line") ||
+      fullStr.includes("street") ||
+      fullStr.includes("street address") ||
+      fullStr.includes("address_1") ||
+      (fullStr.includes("address") && !fullStr.includes("email") && !fullStr.includes("ip")) ||
+      fullStr.includes("العنوان") ||
+      fullStr.includes("الشارع")
+    ) {
       return "address";
     }
-    if (fullStr.includes("city") || fullStr.includes("town") || fullStr.includes("suburb")) {
+
+    // 11. City / Suburb (Workday: addressSection_city)
+    if (
+      fullStr.includes("city") ||
+      fullStr.includes("town") ||
+      fullStr.includes("suburb") ||
+      fullStr.includes("addresssection_city") ||
+      fullStr.includes("المدينة") ||
+      fullStr.includes("البلدة")
+    ) {
       return "city";
     }
-    if (fullStr.includes("country") && !fullStr.includes("code")) {
-      return "country";
-    }
-    if (fullStr.includes("postal") || fullStr.includes("zip") || fullStr.includes("postcode")) {
-      return "postal_code";
-    }
-    if (fullStr.includes("nationality") || fullStr.includes("citizenship")) {
-      return "nationality";
+
+    // 12. State / Region / Province
+    if (
+      fullStr.includes("state") ||
+      fullStr.includes("province") ||
+      fullStr.includes("region") ||
+      fullStr.includes("addresssection_countryregion") ||
+      fullStr.includes("المنطقة") ||
+      fullStr.includes("المحافظة") ||
+      fullStr.includes("الولاية")
+    ) {
+      return "city";
     }
 
-    // 5. Professional & Experience
-    if (fullStr.includes("current") && (fullStr.includes("company") || fullStr.includes("employer") || fullStr.includes("organization"))) {
+    // 13. Postal Code / Zip (Workday: addressSection_postalCode)
+    if (
+      fullStr.includes("postal") ||
+      fullStr.includes("zip") ||
+      fullStr.includes("postcode") ||
+      fullStr.includes("postalcode") ||
+      fullStr.includes("addresssection_postalcode") ||
+      fullStr.includes("الرمز البريدي")
+    ) {
+      return "postal_code";
+    }
+
+    // 14. Country / Nationality
+    if (
+      fullStr.includes("nationality") ||
+      fullStr.includes("citizenship") ||
+      fullStr.includes("الجنسية")
+    ) {
+      return "nationality";
+    }
+    if (
+      fullStr.includes("country") &&
+      !fullStr.includes("code") &&
+      !fullStr.includes("dial") ||
+      fullStr.includes("الدولة") ||
+      fullStr.includes("البلد")
+    ) {
+      return "country";
+    }
+
+    // 15. How Did You Hear About Us? (Workday source prompt)
+    if (
+      fullStr.includes("hear about") ||
+      fullStr.includes("how did you hear") ||
+      fullStr.includes("source") ||
+      fullStr.includes("referral") ||
+      fullStr.includes("من أين سمعت")
+    ) {
+      return "source_referral";
+    }
+
+    // 16. Current Company / Title
+    if (
+      fullStr.includes("current company") ||
+      fullStr.includes("current employer") ||
+      fullStr.includes("company name") ||
+      fullStr.includes("organization") ||
+      fullStr.includes("الشركة الحالية") ||
+      fullStr.includes("جهة العمل")
+    ) {
       return "current_company";
     }
-    if (fullStr.includes("current") && (fullStr.includes("title") || fullStr.includes("position") || fullStr.includes("role"))) {
+    if (
+      fullStr.includes("job title") ||
+      fullStr.includes("current title") ||
+      fullStr.includes("current role") ||
+      fullStr.includes("designation") ||
+      fullStr.includes("المسمى الوظيفي")
+    ) {
       return "current_title";
     }
-    if (fullStr.includes("revit") && (fullStr.includes("year") || fullStr.includes("experience"))) {
+
+    // 17. Experience & Technical Skills
+    if (fullStr.includes("revit") || fullStr.includes("ريفيت")) {
       return "revit_experience_years";
     }
-    if (fullStr.includes("bim") && (fullStr.includes("year") || fullStr.includes("experience"))) {
+    if (fullStr.includes("bim") || fullStr.includes("بيم")) {
       return "bim_experience_years";
     }
-    if ((fullStr.includes("cad") || fullStr.includes("autocad")) && (fullStr.includes("year") || fullStr.includes("experience"))) {
+    if (fullStr.includes("autocad") || fullStr.includes("cad") || fullStr.includes("أوتوكاد")) {
       return "autocad_experience_years";
     }
-    if (fullStr.includes("experience") && fullStr.includes("year") && !fullStr.includes("company")) {
+    if (
+      (fullStr.includes("experience") && (fullStr.includes("year") || fullStr.includes("total"))) ||
+      fullStr.includes("سنوات الخبرة")
+    ) {
       return "total_experience_years";
     }
 
-    // 6. Availability & Notes
-    if (fullStr.includes("notice") || fullStr.includes("availability") || fullStr.includes("start date") || fullStr.includes("commence")) {
-      return "notice_period";
-    }
-    if (fullStr.includes("cover") && (fullStr.includes("letter") || fullStr.includes("note") || fullStr.includes("message"))) {
-      return "cover_letter";
-    }
-    if (fullStr.includes("summary") || fullStr.includes("about") || fullStr.includes("bio") || fullStr.includes("why should we hire you")) {
-      return "summary";
-    }
+    // 18. Certifications (PMP)
     if (fullStr.includes("pmp")) {
       return "pmp_certified";
     }
-    if (fullStr.includes("salary") || fullStr.includes("compensation") || fullStr.includes("remuneration") || fullStr.includes("expectation")) {
+
+    // 19. Notice period & Availability
+    if (
+      fullStr.includes("notice") ||
+      fullStr.includes("availability") ||
+      fullStr.includes("start date") ||
+      fullStr.includes("commence") ||
+      fullStr.includes("فترة الإشعار") ||
+      fullStr.includes("تاريخ البدء")
+    ) {
+      return "notice_period";
+    }
+
+    // 20. Summary / Cover letter / Notes
+    if (
+      fullStr.includes("cover letter") ||
+      fullStr.includes("cover_letter") ||
+      fullStr.includes("خطاب التقديم") ||
+      fullStr.includes("رسالة التغطية")
+    ) {
+      return "cover_letter";
+    }
+    if (
+      fullStr.includes("summary") ||
+      fullStr.includes("about yourself") ||
+      fullStr.includes("bio") ||
+      fullStr.includes("additional info") ||
+      fullStr.includes("why should we hire you") ||
+      fullStr.includes("نبذة") ||
+      fullStr.includes("ملخص")
+    ) {
+      return "summary";
+    }
+
+    // 21. Salary
+    if (
+      fullStr.includes("salary") ||
+      fullStr.includes("compensation") ||
+      fullStr.includes("remuneration") ||
+      fullStr.includes("expectation") ||
+      fullStr.includes("الراتب")
+    ) {
       return "salary_expectation";
     }
-    if (fullStr.includes("sponsor") || fullStr.includes("visa")) {
+
+    // 22. Sponsorship / Visa
+    if (
+      fullStr.includes("sponsor") ||
+      fullStr.includes("visa") ||
+      fullStr.includes("work rights") ||
+      fullStr.includes("كفالة") ||
+      fullStr.includes("فيزا") ||
+      fullStr.includes("إقامة")
+    ) {
       return "sponsorship";
     }
 
@@ -314,15 +568,23 @@
     }
 
     let filledCount = 0;
-    const inputs = document.querySelectorAll("input:not([type='hidden']):not([type='submit']):not([type='file']), textarea, select");
 
-    inputs.forEach((elem) => {
-      // Don't overwrite if user already entered custom content unless empty
+    // Selector covers all standard inputs, Workday search inputs, textareas, selects, and contenteditable
+    const inputs = document.querySelectorAll(
+      "input:not([type='hidden']):not([type='submit']):not([type='file']):not([type='button']), textarea, select"
+    );
+
+    console.log(`[CV Servant AutoFill] Found ${inputs.length} candidate inputs on page.`);
+
+    inputs.forEach((elem, idx) => {
+      // Don't overwrite if user already typed non-empty text (unless it's just spaces)
       if (elem.value && elem.value.trim().length > 0 && elem.type !== "select-one") {
         return;
       }
 
       const matchType = matchFieldDescriptor(elem);
+      console.log(`[CV Servant AutoFill] Input #${idx} (${elem.id || elem.name || 'unnamed'}): matchType = ${matchType}`);
+
       if (!matchType) return;
 
       let valueToFill = "";
@@ -347,6 +609,9 @@
           break;
         case "phone_country_code":
           valueToFill = candidateData.phone_country_code;
+          break;
+        case "phone_device_type":
+          valueToFill = "Mobile";
           break;
         case "linkedin":
           valueToFill = candidateData.linkedin;
@@ -377,6 +642,9 @@
           break;
         case "nationality":
           valueToFill = candidateData.nationality;
+          break;
+        case "source_referral":
+          valueToFill = "LinkedIn";
           break;
         case "total_experience_years":
           valueToFill = candidateData.total_experience_years;
@@ -412,7 +680,6 @@
 
       if (valueToFill !== undefined && valueToFill !== "") {
         if (elem.tagName.toLowerCase() === "select") {
-          // Select dropdown handling
           let found = false;
           const targetStr = String(valueToFill).toLowerCase();
           for (let opt of elem.options) {
@@ -429,8 +696,6 @@
         } else {
           setNativeValue(elem, valueToFill);
           filledCount++;
-          elem.style.transition = "background-color 0.4s ease";
-          elem.style.backgroundColor = "rgba(16, 185, 129, 0.15)";
         }
       }
     });
@@ -460,7 +725,7 @@
     if (filledCount > 0) {
       showToast(`⚡ تم تعبئة ${filledCount} حقلاً بنجاح عبر CV Servant!`, "success");
     } else {
-      showToast("ℹ️ تم فحص النموذج، تأكد من وجود حقول اسم أو بريد أو هاتف فارغة.", "info");
+      showToast("ℹ️ تم فحص الحقول على الصفحة. يرجى التأكد من وقوفك على صفحة استمارة التقديم.", "warning");
     }
 
     return { filled: filledCount };
