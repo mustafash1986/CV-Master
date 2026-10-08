@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CV Servant – Smart Job Auto-Fill & Tracker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "تعبئة نماذج التقديم على الوظائف تلقائياً وتتبع الطلبات المكتملة في برنامج CV Servant للمهندس مصطفى شوقي",
   "icons": {
     "16": "icons/icon16.png",
@@ -35,9 +35,10 @@
   "content_scripts": [
     {
       "matches": ["*://*/*"],
-      "js": ["content/autofill.js"],
+      "js": ["common/candidate_profile.js", "content/autofill.js"],
       "css": ["content/styles.css"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }

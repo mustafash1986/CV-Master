@@ -1,28 +1,42 @@
 /**
  * CV Servant - Smart Job Auto-Fill & Tracker Content Script
- * Auto-detects career forms and fills candidate data with native event simulation.
- * Scrapes job details and synchronizes with CV Servant desktop tracker.
+ * High-intelligence form matching for ATS systems, job boards, and company career portals.
  */
 
 (function () {
-  let candidateData = null;
+  // Always initialize candidateData with embedded default profile so it's NEVER null
+  let candidateData = typeof DEFAULT_CANDIDATE_PROFILE !== "undefined"
+    ? Object.assign({}, DEFAULT_CANDIDATE_PROFILE)
+    : null;
+
   let isFloatingWidgetInjected = false;
 
-  // Initialize and check if this page is a job board or application
-  async function init() {
-    // Request candidate profile from background service worker
-    chrome.runtime.sendMessage({ action: "GET_PROFILE" }, (response) => {
-      if (response && response.success && response.profile) {
-        candidateData = response.profile;
-        checkAndInjectFloatingWidget();
-      }
-    });
+  // Initialize and sync latest profile from local server
+  function init() {
+    // 1. Sync updated profile from background service worker (from local server / storage)
+    try {
+      chrome.runtime.sendMessage({ action: "GET_PROFILE" }, (response) => {
+        if (response && response.success && response.profile) {
+          candidateData = Object.assign({}, candidateData || {}, response.profile);
+        }
+      });
+    } catch (e) {
+      // Content script context
+    }
 
-    // Listen for manual trigger messages from the extension popup
+    // 2. Inject floating widget if this is a job page
+    checkAndInjectFloatingWidget();
+
+    // 3. Listen for trigger messages from popup or background
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === "TRIGGER_AUTOFILL") {
-        const stats = performAutoFill();
-        sendResponse({ success: true, stats });
+        if (request.payload && request.payload.profile) {
+          candidateData = Object.assign({}, candidateData || {}, request.payload.profile);
+        }
+        performAutoFill().then((stats) => {
+          sendResponse({ success: true, stats });
+        });
+        return true; // Keep channel open for async response
       } else if (request.action === "GET_PAGE_JOB_INFO") {
         const jobInfo = extractPageJobInfo();
         sendResponse({ success: true, jobInfo });
@@ -39,12 +53,12 @@
     const jobDomains = [
       "linkedin.com", "indeed.com", "seek.com.au", "seek.co.nz",
       "myworkdayjobs.com", "greenhouse.io", "lever.co", "smartrecruiters.com",
-      "workable.com", "bamboohr.com", "taleo.net", "icims.com"
+      "workable.com", "bamboohr.com", "taleo.net", "icims.com", "ashbyhq.com"
     ];
 
     const hasDomain = jobDomains.some(d => hostname.includes(d));
-    const hasJobWords = url.includes("job") || url.includes("career") || url.includes("apply") || url.includes("vacancy");
-    const hasFormWords = text.includes("apply") || text.includes("resume") || text.includes("cv") || text.includes("first name");
+    const hasJobWords = url.includes("job") || url.includes("career") || url.includes("apply") || url.includes("vacancy") || url.includes("position");
+    const hasFormWords = text.includes("apply") || text.includes("resume") || text.includes("cv") || text.includes("first name") || text.includes("application");
 
     return hasDomain || hasJobWords || hasFormWords;
   }
@@ -70,12 +84,12 @@
 
     // 2. Seek / Indeed / Workday / Greenhouse
     if (!title) {
-      const h1 = document.querySelector("h1, [data-automation-id='jobPostingHeader'], .job-title");
+      const h1 = document.querySelector("h1, [data-automation-id='jobPostingHeader'], .job-title, [data-qa='job-title']");
       if (h1) title = h1.innerText.trim();
     }
 
     if (!company) {
-      const compNode = document.querySelector("[data-automation-id='legalEntityName'], .company-name, .employer, [data-automation='advertiser-name']");
+      const compNode = document.querySelector("[data-automation-id='legalEntityName'], .company-name, .employer, [data-automation='advertiser-name'], [data-qa='company-name']");
       if (compNode) company = compNode.innerText.trim();
     }
 
@@ -89,7 +103,7 @@
     }
 
     return {
-      job_title: title || "BIM Role",
+      job_title: title || "Architect & BIM Role",
       company_name: company || "Direct Employer",
       country: location || "Australia",
       city: location || "",
@@ -104,6 +118,9 @@
 
     const valueToSet = String(value);
 
+    // Focus input
+    element.focus();
+
     // Call native setter to bypass React 16+ synthetic event suppression
     const prototype = Object.getPrototypeOf(element);
     const nativeDescriptor = Object.getOwnPropertyDescriptor(prototype, "value");
@@ -113,19 +130,22 @@
       element.value = valueToSet;
     }
 
-    // Dispatch synthetic bubbles
+    // Dispatch full cycle of synthetic events for frameworks with character limits (e.g. 0/200)
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
     element.dispatchEvent(new Event("blur", { bubbles: true }));
   }
 
-  // Matches a form field to candidate data based on its attributes and labels
-  function matchFieldDescriptor(field) {
+  // Extracts contextual descriptor strings around a field
+  function getFieldContextText(field) {
     const id = (field.id || "").toLowerCase();
     const name = (field.name || "").toLowerCase();
     const placeholder = (field.placeholder || "").toLowerCase();
     const aria = (field.getAttribute("aria-label") || "").toLowerCase();
     const autocomplete = (field.getAttribute("autocomplete") || "").toLowerCase();
+    const dataQa = (field.getAttribute("data-qa") || field.getAttribute("data-automation-id") || field.getAttribute("data-testid") || "").toLowerCase();
 
     // Associated label search
     let labelText = "";
@@ -136,56 +156,112 @@
     if (!labelText && field.closest("label")) {
       labelText = field.closest("label").innerText.toLowerCase();
     }
-    if (!labelText) {
-      const parent = field.parentElement;
-      if (parent) {
-        const prevLabel = parent.querySelector("label, .label, span");
-        if (prevLabel) labelText = prevLabel.innerText.toLowerCase();
-      }
+
+    // Search parent containers (.form-group, .field, table row, section)
+    let containerText = "";
+    const parent = field.closest(".form-group, .field, .input-group, .form-row, tr, [data-automation-id], fieldset, div");
+    if (parent) {
+      const labels = parent.querySelectorAll("label, span, p, h2, h3, h4, h5, .label, .title");
+      labels.forEach((l) => {
+        // Exclude character counter text like "0/200" from descriptor text
+        const t = l.innerText.toLowerCase().trim();
+        if (!t.match(/^\d+\s*\/\s*\d+$/)) {
+          containerText += " " + t;
+        }
+      });
     }
 
-    const fullStr = `${id} ${name} ${placeholder} ${aria} ${autocomplete} ${labelText}`;
+    // Preceding sibling text
+    let siblingText = "";
+    let prev = field.previousElementSibling;
+    while (prev) {
+      const pt = prev.innerText ? prev.innerText.toLowerCase().trim() : "";
+      if (pt && !pt.match(/^\d+\s*\/\s*\d+$/)) {
+        siblingText += " " + pt;
+      }
+      prev = prev.previousElementSibling;
+    }
 
-    // Matching logic
-    if (fullStr.includes("first") && (fullStr.includes("name") || fullStr.includes("given"))) {
+    return `${id} ${name} ${placeholder} ${aria} ${autocomplete} ${dataQa} ${labelText} ${containerText} ${siblingText}`;
+  }
+
+  // Matches a form field to candidate data based on its attributes and labels
+  function matchFieldDescriptor(field) {
+    const fullStr = getFieldContextText(field);
+
+    // 1. Name matches
+    if (fullStr.includes("first") && (fullStr.includes("name") || fullStr.includes("given") || fullStr.includes("fname"))) {
       return "first_name";
     }
-    if (fullStr.includes("last") && (fullStr.includes("name") || fullStr.includes("surname") || fullStr.includes("family"))) {
+    if (fullStr.includes("last") && (fullStr.includes("name") || fullStr.includes("surname") || fullStr.includes("family") || fullStr.includes("lname"))) {
       return "last_name";
     }
     if (fullStr.includes("middle") && fullStr.includes("name")) {
       return "middle_name";
     }
-    if ((fullStr.includes("full") && fullStr.includes("name")) || (fullStr.includes("applicant") && fullStr.includes("name")) || name === "name" || id === "name") {
+    if (
+      (fullStr.includes("full") && fullStr.includes("name")) ||
+      (fullStr.includes("candidate") && fullStr.includes("name")) ||
+      (fullStr.includes("applicant") && fullStr.includes("name")) ||
+      fullStr.includes("your name") ||
+      field.name === "name" ||
+      field.id === "name"
+    ) {
       return "full_name";
     }
-    if (fullStr.includes("email") || fullStr.includes("e-mail") || autocomplete.includes("email")) {
+
+    // 2. Contact details
+    if (fullStr.includes("email") || fullStr.includes("e-mail") || field.type === "email") {
       return "email";
     }
-    if (fullStr.includes("phone") || fullStr.includes("mobile") || fullStr.includes("cell") || fullStr.includes("tel") || autocomplete.includes("tel")) {
-      if (fullStr.includes("country") || fullStr.includes("code")) return "phone_country_code";
+    if (fullStr.includes("country code") || fullStr.includes("dial code")) {
+      return "phone_country_code";
+    }
+    if (
+      fullStr.includes("phone") ||
+      fullStr.includes("mobile") ||
+      fullStr.includes("cell") ||
+      fullStr.includes("tel") ||
+      fullStr.includes("contact number") ||
+      field.type === "tel"
+    ) {
       return "phone";
     }
+
+    // 3. Links & Portfolio
     if (fullStr.includes("linkedin")) {
       return "linkedin";
     }
-    if (fullStr.includes("portfolio") || fullStr.includes("website") || fullStr.includes("github") || fullStr.includes("personal site")) {
+    if (fullStr.includes("portfolio") || fullStr.includes("website") || fullStr.includes("personal site") || fullStr.includes("web link")) {
       return "portfolio";
     }
+    if (fullStr.includes("github")) {
+      return "github";
+    }
+
+    // 4. Address & Location
     if (fullStr.includes("address") || fullStr.includes("street")) {
       return "address";
     }
-    if (fullStr.includes("city") || fullStr.includes("town")) {
+    if (fullStr.includes("city") || fullStr.includes("town") || fullStr.includes("suburb")) {
       return "city";
     }
-    if (fullStr.includes("country") && !fullStr.includes("phone")) {
+    if (fullStr.includes("country") && !fullStr.includes("code")) {
       return "country";
     }
-    if (fullStr.includes("postal") || fullStr.includes("zip")) {
+    if (fullStr.includes("postal") || fullStr.includes("zip") || fullStr.includes("postcode")) {
       return "postal_code";
     }
     if (fullStr.includes("nationality") || fullStr.includes("citizenship")) {
       return "nationality";
+    }
+
+    // 5. Professional & Experience
+    if (fullStr.includes("current") && (fullStr.includes("company") || fullStr.includes("employer") || fullStr.includes("organization"))) {
+      return "current_company";
+    }
+    if (fullStr.includes("current") && (fullStr.includes("title") || fullStr.includes("position") || fullStr.includes("role"))) {
+      return "current_title";
     }
     if (fullStr.includes("revit") && (fullStr.includes("year") || fullStr.includes("experience"))) {
       return "revit_experience_years";
@@ -199,19 +275,21 @@
     if (fullStr.includes("experience") && fullStr.includes("year") && !fullStr.includes("company")) {
       return "total_experience_years";
     }
-    if (fullStr.includes("notice") || fullStr.includes("availability") || fullStr.includes("start date")) {
+
+    // 6. Availability & Notes
+    if (fullStr.includes("notice") || fullStr.includes("availability") || fullStr.includes("start date") || fullStr.includes("commence")) {
       return "notice_period";
     }
-    if (fullStr.includes("cover") && (fullStr.includes("letter") || fullStr.includes("note"))) {
+    if (fullStr.includes("cover") && (fullStr.includes("letter") || fullStr.includes("note") || fullStr.includes("message"))) {
       return "cover_letter";
     }
-    if (fullStr.includes("summary") || fullStr.includes("about") || fullStr.includes("bio")) {
+    if (fullStr.includes("summary") || fullStr.includes("about") || fullStr.includes("bio") || fullStr.includes("why should we hire you")) {
       return "summary";
     }
     if (fullStr.includes("pmp")) {
       return "pmp_certified";
     }
-    if (fullStr.includes("salary") || fullStr.includes("compensation")) {
+    if (fullStr.includes("salary") || fullStr.includes("compensation") || fullStr.includes("remuneration") || fullStr.includes("expectation")) {
       return "salary_expectation";
     }
     if (fullStr.includes("sponsor") || fullStr.includes("visa")) {
@@ -222,9 +300,16 @@
   }
 
   // Executes form autofill across inputs, textareas, and selects
-  function performAutoFill() {
+  async function performAutoFill() {
+    // Ensure candidate data is loaded
     if (!candidateData) {
-      showToast("❌ بيانات المرشح غير محملة. تأكد من تشغيل تطبيق CV Servant.", "error");
+      if (typeof DEFAULT_CANDIDATE_PROFILE !== "undefined") {
+        candidateData = Object.assign({}, DEFAULT_CANDIDATE_PROFILE);
+      }
+    }
+
+    if (!candidateData) {
+      showToast("❌ بيانات المرشح غير متوفرة.", "error");
       return { filled: 0 };
     }
 
@@ -268,6 +353,15 @@
           break;
         case "portfolio":
           valueToFill = candidateData.portfolio;
+          break;
+        case "github":
+          valueToFill = candidateData.github;
+          break;
+        case "current_company":
+          valueToFill = candidateData.current_company;
+          break;
+        case "current_title":
+          valueToFill = candidateData.current_title;
           break;
         case "address":
           valueToFill = candidateData.address;
@@ -318,7 +412,7 @@
 
       if (valueToFill !== undefined && valueToFill !== "") {
         if (elem.tagName.toLowerCase() === "select") {
-          // Find matching option
+          // Select dropdown handling
           let found = false;
           const targetStr = String(valueToFill).toLowerCase();
           for (let opt of elem.options) {
@@ -363,7 +457,12 @@
       }
     });
 
-    showToast(`⚡ تم تعبئة ${filledCount} حقلاً بنجاح عبر CV Servant!`, "success");
+    if (filledCount > 0) {
+      showToast(`⚡ تم تعبئة ${filledCount} حقلاً بنجاح عبر CV Servant!`, "success");
+    } else {
+      showToast("ℹ️ تم فحص النموذج، تأكد من وجود حقول اسم أو بريد أو هاتف فارغة.", "info");
+    }
+
     return { filled: filledCount };
   }
 
@@ -381,7 +480,6 @@
     }, (res) => {
       if (res && res.success) {
         showToast(`✅ تم تسجيل الوظيفة بنجاح في السجل (${jobInfo.company_name})!`, "success");
-        // Update floating widget button style
         const trackBtn = document.getElementById("cvs-floating-track-btn");
         if (trackBtn) {
           trackBtn.innerHTML = "✅ تم التتبع";

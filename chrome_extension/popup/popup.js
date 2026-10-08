@@ -13,8 +13,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const toast = document.getElementById("popup-toast");
 
   let currentPageJobInfo = null;
+  let cachedCandidateProfile = typeof DEFAULT_CANDIDATE_PROFILE !== "undefined" ? DEFAULT_CANDIDATE_PROFILE : null;
 
-  // 1. Check local server connection
+  // 1. Check local server connection and fetch profile
   chrome.runtime.sendMessage({ action: "CHECK_STATUS" }, (response) => {
     if (response && response.online) {
       statusBadge.className = "status-badge status-online";
@@ -22,6 +23,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else {
       statusBadge.className = "status-badge status-offline";
       statusText.innerText = "البرنامج غير متصل";
+    }
+  });
+
+  chrome.runtime.sendMessage({ action: "GET_PROFILE" }, (response) => {
+    if (response && response.success && response.profile) {
+      cachedCandidateProfile = response.profile;
     }
   });
 
@@ -57,15 +64,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   btnAutofill.addEventListener("click", () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (!tabs || !tabs[0]) return;
+      const activeTab = tabs[0];
       showToast("⏳ جاري تعبئة بيانات المرشح في الصفحة...");
 
-      chrome.tabs.sendMessage(tabs[0].id, { action: "TRIGGER_AUTOFILL" }, (response) => {
-        if (chrome.runtime.lastError) {
-          showToast("⚠️ يرجى تحديث الصفحة والمحاولة مرة أخرى.");
-        } else if (response && response.success) {
-          showToast(`⚡ تم تعبئة ${response.stats?.filled || 0} حقلاً بنجاح!`);
+      // Always pass candidate profile directly so content script never lacks data
+      const profileToUse = cachedCandidateProfile || (typeof DEFAULT_CANDIDATE_PROFILE !== "undefined" ? DEFAULT_CANDIDATE_PROFILE : null);
+
+      chrome.tabs.sendMessage(
+        activeTab.id,
+        { action: "TRIGGER_AUTOFILL", payload: { profile: profileToUse } },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            showToast("⚠️ يرجى تحديث الصفحة والمحاولة مرة أخرى.");
+          } else if (response && response.success) {
+            const count = response.stats?.filled || 0;
+            if (count > 0) {
+              showToast(`⚡ تم تعبئة ${count} حقلاً بنجاح!`);
+            } else {
+              showToast("لم يتم العثور على حقول فارغة متطابقة في الصفحة.");
+            }
+          }
         }
-      });
+      );
     });
   });
 

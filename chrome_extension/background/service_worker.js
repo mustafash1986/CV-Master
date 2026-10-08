@@ -3,6 +3,12 @@
  * Manages communication between web pages, extension popup, and local CV Servant REST API.
  */
 
+try {
+  importScripts("../common/candidate_profile.js");
+} catch (e) {
+  console.warn("Could not import candidate_profile.js in service worker:", e);
+}
+
 const LOCAL_BRIDGE_URL = "http://127.0.0.1:5822";
 
 // Check health of local CV Servant server
@@ -22,7 +28,7 @@ async function checkBridgeStatus() {
   return { online: false };
 }
 
-// Fetch candidate profile from local server with local storage fallback
+// Fetch candidate profile with live server priority, local cache fallback, and embedded profile default
 async function getCandidateProfile() {
   try {
     const res = await fetch(`${LOCAL_BRIDGE_URL}/api/profile`, {
@@ -38,16 +44,26 @@ async function getCandidateProfile() {
       }
     }
   } catch (err) {
-    console.warn("CV Servant local server not reachable, trying cached profile:", err);
+    // Local server offline or busy
   }
 
-  // Fallback to cached profile if server isn't running
-  const storage = await chrome.storage.local.get(["cachedProfile"]);
-  if (storage.cachedProfile) {
-    return { success: true, profile: storage.cachedProfile, source: "cache" };
+  // Fallback 1: Cached profile in chrome.storage
+  try {
+    const storage = await chrome.storage.local.get(["cachedProfile"]);
+    if (storage.cachedProfile) {
+      return { success: true, profile: storage.cachedProfile, source: "cache" };
+    }
+  } catch (e) {
+    // Storage error
   }
 
-  return { success: false, error: "CV Servant local server not reachable. Please start CV Servant desktop application." };
+  // Fallback 2: Embedded default profile
+  const fallback = typeof DEFAULT_CANDIDATE_PROFILE !== "undefined" ? DEFAULT_CANDIDATE_PROFILE : null;
+  return {
+    success: true,
+    profile: fallback,
+    source: "embedded_default"
+  };
 }
 
 // Send tracked application to CV Servant local server
