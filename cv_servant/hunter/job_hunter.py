@@ -37,17 +37,21 @@ class LiveJobHunter:
         keywords: str = "BIM Specialist",
         country: str = "Australia",
         sponsorship_only: bool = False,
+        jobage_days: Optional[int] = 7,
         limit: int = 15,
     ) -> List[Dict[str, Any]]:
         """
         Searches REAL, LIVE job opportunities currently posted on the web.
+        Supports filtering by recency (jobage_days: 1, 7, 14, 30, or None for all).
         """
         results = []
         clean_kw = keywords.strip()
 
         # 1. Fetch live jobs from LinkedIn Guest Search API (100% real, active postings)
         try:
-            live_linkedin_jobs = self._fetch_linkedin_live(clean_kw, country, limit=limit)
+            live_linkedin_jobs = self._fetch_linkedin_live(
+                clean_kw, country, limit=limit, jobage_days=jobage_days
+            )
             results.extend(live_linkedin_jobs)
         except Exception as e:
             logger.error(f"Error fetching live LinkedIn jobs: {e}")
@@ -97,14 +101,26 @@ class LiveJobHunter:
 
         return processed[:limit]
 
-    def _fetch_linkedin_live(self, keywords: str, country: str, limit: int = 15) -> List[Dict[str, Any]]:
+    def _fetch_linkedin_live(
+        self,
+        keywords: str,
+        country: str,
+        limit: int = 15,
+        jobage_days: Optional[int] = 7,
+    ) -> List[Dict[str, Any]]:
         """
         Queries LinkedIn's public guest search endpoint to retrieve 100% active, real jobs.
         Ported from the ai-job-search framework with zero credential requirement.
+        Supports recency filtering via jobage_days (f_TPR parameter).
         """
         encoded_kw = urllib.parse.quote(keywords)
         encoded_loc = urllib.parse.quote(country)
         url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={encoded_kw}&location={encoded_loc}&start=0"
+
+        # Map jobage to LinkedIn's f_TPR filter
+        tpr_mapping = {1: "r86400", 7: "r604800", 14: "r1209600", 30: "r2592000"}
+        if jobage_days and jobage_days in tpr_mapping:
+            url += f"&f_TPR={tpr_mapping[jobage_days]}"
 
         jobs = []
         try:
@@ -151,12 +167,14 @@ class LiveJobHunter:
             loc_m = re.search(r'<span class="job-search-card__location">([^<]+)</span>', part)
             clean_loc = html.unescape(loc_m.group(1).strip()) if loc_m else country
 
-            # Date
-            date_m = re.search(r'<time class="job-search-card__listdate"[^>]*>([^<]+)</time>', part)
-            post_date = date_m.group(1).strip() if date_m else datetime.now().strftime("%Y-%m-%d")
+            # Date (handles standard and --new listdate badges, stripping whitespace)
+            date_m = re.search(r'<time[^>]*class="[^"]*job-search-card__listdate[^"]*"[^>]*>([^<]+)</time>', part)
+            if not date_m:
+                date_m = re.search(r'<time[^>]*>([^<]+)</time>', part)
+            post_date = re.sub(r'\s+', ' ', date_m.group(1)).strip() if date_m else datetime.now().strftime("%Y-%m-%d")
 
             # Fetch rich description from public guest detail endpoint
-            job_desc_snippet = f"Active opening for {clean_title} at {clean_company}. Location: {clean_loc}."
+            job_desc_snippet = f"Active opening for {clean_title} at {clean_company}. Location: {clean_loc}. Posted: {post_date}."
             if job_id:
                 try:
                     desc_res = requests.get(

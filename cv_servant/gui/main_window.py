@@ -261,12 +261,20 @@ class HunterWorker(QThread):
     results_signal = Signal(list)
     error_signal = Signal(str)
 
-    def __init__(self, hunter: LiveJobHunter, keywords: str, country: str, sponsorship_only: bool):
+    def __init__(
+        self,
+        hunter: LiveJobHunter,
+        keywords: str,
+        country: str,
+        sponsorship_only: bool,
+        jobage_days: Optional[int] = 7,
+    ):
         super().__init__()
         self.hunter = hunter
         self.keywords = keywords
         self.country = country
         self.sponsorship_only = sponsorship_only
+        self.jobage_days = jobage_days
 
     def run(self):
         try:
@@ -274,6 +282,7 @@ class HunterWorker(QThread):
                 keywords=self.keywords,
                 country=self.country,
                 sponsorship_only=self.sponsorship_only,
+                jobage_days=self.jobage_days,
                 limit=15
             )
             self.results_signal.emit(res)
@@ -406,6 +415,16 @@ class MainWindow(QMainWindow):
         self.combo_keywords.addItems(["Senior BIM Specialist", "BIM Manager", "Architect", "BIM Coordinator", "Computational Architect"])
         c_layout.addWidget(self.combo_keywords)
 
+        # Recency Filter
+        c_layout.addWidget(QLabel("📅 تاريخ النشر:"))
+        self.combo_jobage = QComboBox()
+        self.combo_jobage.addItem("آخر أسبوع (7 أيام)", 7)
+        self.combo_jobage.addItem("آخر 24 ساعة (يوم واحد)", 1)
+        self.combo_jobage.addItem("آخر أسبوعين (14 يوماً)", 14)
+        self.combo_jobage.addItem("آخر شهر (30 يوماً)", 30)
+        self.combo_jobage.addItem("أي وقت (بدون فلتر)", None)
+        c_layout.addWidget(self.combo_jobage)
+
         # Sponsorship Checkbox
         self.chk_sponsorship_only = QCheckBox("🌟 وظائف الكفالة فقط (Visa Sponsorship / LMIA / TSS 482)")
         self.chk_sponsorship_only.setChecked(True)
@@ -422,31 +441,38 @@ class MainWindow(QMainWindow):
         self.hunter_progress.setVisible(False)
         layout.addWidget(self.hunter_progress)
 
-        # Results Table
+        # Results Table (9 Columns with Posting Date)
         self.hunter_table = QTableWidget()
-        self.hunter_table.setColumnCount(8)
+        self.hunter_table.setColumnCount(9)
         self.hunter_table.setHorizontalHeaderLabels([
-            "المسمى الوظيفي", "الشركة", "الدولة / المدينة", "المصدر", "الكفالة (Sponsorship)", "درجة المطابقة", "تم التقديم ☑️", "إجراء فوري"
+            "المسمى الوظيفي", "الشركة", "الدولة / المدينة", "تاريخ النشر 📅", "المصدر", "الكفالة والأهلية", "درجة المطابقة", "تم التقديم ☑️", "إجراء فوري"
         ])
         self.hunter_table.verticalHeader().setDefaultSectionSize(48)
         self.hunter_table.verticalHeader().setVisible(True)
         self.hunter_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.hunter_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self.hunter_table.setColumnWidth(3, 125)
+        self.hunter_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)
+        self.hunter_table.setColumnWidth(4, 110)
         self.hunter_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Fixed)
-        self.hunter_table.setColumnWidth(6, 150)
+        self.hunter_table.setColumnWidth(6, 120)
         self.hunter_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Fixed)
-        self.hunter_table.setColumnWidth(7, 320)
+        self.hunter_table.setColumnWidth(7, 140)
+        self.hunter_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Fixed)
+        self.hunter_table.setColumnWidth(8, 320)
         layout.addWidget(self.hunter_table)
 
     def _run_job_search(self):
         country = self.combo_country.currentText()
         keywords = self.combo_keywords.currentText().strip()
         sponsorship_only = self.chk_sponsorship_only.isChecked()
+        jobage_days = self.combo_jobage.currentData()
 
         self.hunter_progress.setVisible(True)
         self.hunter_progress.setRange(0, 0)
         self.btn_search_jobs.setEnabled(False)
 
-        self.hunter_worker = HunterWorker(self.hunter, keywords, country, sponsorship_only)
+        self.hunter_worker = HunterWorker(self.hunter, keywords, country, sponsorship_only, jobage_days)
         self.hunter_worker.results_signal.connect(self._on_hunter_results)
         self.hunter_worker.error_signal.connect(self._on_hunter_error)
         self.hunter_worker.start()
@@ -472,11 +498,34 @@ class MainWindow(QMainWindow):
             l_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             self.hunter_table.setItem(row, 2, l_item)
 
+            # Col 3: Posted Date (highlighted according to recency)
+            raw_date = job.get("posted_date", "اليوم").strip()
+            date_item = QTableWidgetItem()
+            date_lower = raw_date.lower()
+            if any(k in date_lower for k in ["hour", "just now", "1 day", "2 day", "3 day", "day ago", "days ago"]):
+                date_item.setText(f"🟢 {raw_date}")
+                date_item.setForeground(QColor("#10B981"))
+            elif "1 week" in date_lower or "week ago" in date_lower:
+                date_item.setText(f"🟢 {raw_date}")
+                date_item.setForeground(QColor("#10B981"))
+            elif any(k in date_lower for k in ["2 week", "3 week", "4 week", "weeks"]):
+                date_item.setText(f"🔵 {raw_date}")
+                date_item.setForeground(QColor("#38BDF8"))
+            elif "month" in date_lower:
+                date_item.setText(f"⚠️ {raw_date}")
+                date_item.setForeground(QColor("#F59E0B"))
+            else:
+                date_item.setText(raw_date)
+                date_item.setForeground(QColor("#94A3B8"))
+            date_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            self.hunter_table.setItem(row, 3, date_item)
+
+            # Col 4: Source
             s_item = QTableWidgetItem(job.get("source", ""))
             s_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
-            self.hunter_table.setItem(row, 3, s_item)
+            self.hunter_table.setItem(row, 4, s_item)
 
-            # Sponsorship & Eligibility Gate badge
+            # Col 5: Sponsorship & Eligibility Gate badge
             gate = job.get("eligibility_gate", {})
             g_verdict = gate.get("verdict", "")
             spon_text = job.get("visa_sponsorship", "Not Mentioned")
@@ -494,16 +543,16 @@ class MainWindow(QMainWindow):
             else:
                 spon_item.setForeground(QColor("#F59E0B"))
             spon_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
-            self.hunter_table.setItem(row, 4, spon_item)
+            self.hunter_table.setItem(row, 5, spon_item)
 
-            # Fit score & 5D verdict
+            # Col 6: Fit score & 5D verdict
             v_text = job.get("fit_verdict", "")
             score_num = job.get("fit_score", 85)
             fit_label = f"{score_num}% ({v_text})" if v_text else f"{score_num}%"
             fit_item = QTableWidgetItem(fit_label)
             fit_item.setForeground(QColor("#38BDF8"))
             fit_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
-            self.hunter_table.setItem(row, 5, fit_item)
+            self.hunter_table.setItem(row, 6, fit_item)
 
             # Check if this job was already applied to in tracker
             job_url = job.get("job_url", "")
@@ -512,7 +561,7 @@ class MainWindow(QMainWindow):
             existing = self.coordinator.tracker.find_job_by_url_or_title(job_url, title, company)
             is_already_applied = bool(existing and "Applied" in str(existing.get("status", "")))
 
-            # Col 6: Interactive Checkbox for external tracking
+            # Col 7: Interactive Checkbox for external tracking
             chk_w = QWidget()
             chk_lay = QHBoxLayout(chk_w)
             chk_lay.setContentsMargins(6, 4, 6, 4)
@@ -529,9 +578,9 @@ class MainWindow(QMainWindow):
 
             chk_app.toggled.connect(lambda checked, j=job, cb=chk_app: self._on_hunter_job_applied_toggled(j, checked, cb))
             chk_lay.addWidget(chk_app)
-            self.hunter_table.setCellWidget(row, 6, chk_w)
+            self.hunter_table.setCellWidget(row, 7, chk_w)
 
-            # Col 7: Action Buttons widget (fills cell completely with zero margins)
+            # Col 8: Action Buttons widget (fills cell completely with zero margins)
             act_w = QWidget()
             act_lay = QHBoxLayout(act_w)
             act_lay.setContentsMargins(0, 0, 0, 0)
@@ -578,10 +627,13 @@ class MainWindow(QMainWindow):
             btn_apply.clicked.connect(lambda ch, j=job: self._apply_to_hunter_job(j))
             act_lay.addWidget(btn_apply, stretch=1)
 
-            self.hunter_table.setCellWidget(row, 7, act_w)
+            self.hunter_table.setCellWidget(row, 8, act_w)
 
-        self.hunter_table.setColumnWidth(6, 150)
-        self.hunter_table.setColumnWidth(7, 320)
+        self.hunter_table.setColumnWidth(3, 125)
+        self.hunter_table.setColumnWidth(4, 110)
+        self.hunter_table.setColumnWidth(6, 120)
+        self.hunter_table.setColumnWidth(7, 140)
+        self.hunter_table.setColumnWidth(8, 320)
 
     def _on_hunter_job_applied_toggled(self, job: Dict[str, Any], is_applied: bool, checkbox: QCheckBox):
         job_id = self.coordinator.tracker.track_external_application(job, is_applied)
