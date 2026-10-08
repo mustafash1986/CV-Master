@@ -1,0 +1,164 @@
+/* CV Servant Floating Action Widget Styles */
+#cv-servant-floating-panel {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999999;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Cairo", Roboto, sans-serif;
+  direction: rtl;
+  user-select: none;
+}
+
+.cvs-floating-box {
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cvs-floating-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+  padding-bottom: 6px;
+}
+
+.cvs-floating-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #38BDF8;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+.cvs-dot {
+  width: 8px;
+  height: 8px;
+  background-color: #10B981;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #10B981;
+  display: inline-block;
+}
+
+#cvs-minimize-btn {
+  background: transparent;
+  border: none;
+  color: #94A3B8;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+#cvs-minimize-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #EF4444;
+}
+
+.cvs-floating-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.cvs-btn {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cvs-btn-fill {
+  background: linear-gradient(135deg, #0284C7 0%, #0369A1 100%);
+  color: #FFFFFF;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.3);
+}
+
+.cvs-btn-fill:hover {
+  background: linear-gradient(135deg, #0369A1 0%, #075985 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.5);
+}
+
+.cvs-btn-track {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  color: #FFFFFF;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
+}
+
+.cvs-btn-track:hover {
+  background: linear-gradient(135deg, #047857 0%, #065F46 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.5);
+}
+
+#cv-servant-floating-panel.cvs-minimized .cvs-floating-actions {
+  display: none;
+}
+
+#cv-servant-floating-panel.cvs-minimized .cvs-floating-box {
+  min-width: auto;
+  padding: 6px 10px;
+}
+
+/* Toast Notifications */
+#cvs-toast {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  z-index: 10000000;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #FFFFFF;
+  direction: rtl;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+}
+
+.cvs-toast-visible {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+
+.cvs-toast-success {
+  background: #065F46;
+  border: 1px solid #10B981;
+}
+
+.cvs-toast-error {
+  background: #7F1D1D;
+  border: 1px solid #EF4444;
+}
+
+.cvs-toast-info {
+  background: #0C4A6E;
+  border: 1px solid #38BDF8;
+}
+
+.cvs-toast-warning {
+  background: #78350F;
+  border: 1px solid #F59E0B;
+}

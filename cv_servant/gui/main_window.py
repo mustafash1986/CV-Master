@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 from cv_servant.config import EXCEL_TRACKER_PATH, GMAIL_USER
 from cv_servant.coordinator import ApplicationCoordinator
 from cv_servant.hunter.job_hunter import LiveJobHunter
+from cv_servant.bridge.api_server import CVBridgeServer
 
 DARK_THEME_QSS = """
 QMainWindow {
@@ -309,6 +310,8 @@ class RefineJobWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    chrome_job_tracked_signal = Signal(dict, str)
+
     def __init__(self):
         super().__init__()
         self.coordinator = ApplicationCoordinator()
@@ -324,13 +327,25 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_tracked_jobs()
 
+        # Connect Chrome bridge signal to safe UI slot
+        self.chrome_job_tracked_signal.connect(self._handle_chrome_job_tracked_ui)
+
         # Start non-blocking background Telegram thread
         self.tg_thread = BackgroundTelegramThread(self.coordinator)
         self.tg_thread.start()
 
+        # Start local HTTP Bridge server for Chrome Extension (Port 5822)
+        self.bridge_server = CVBridgeServer(
+            self.coordinator,
+            on_application_tracked=self._on_chrome_job_tracked
+        )
+        self.bridge_server.start()
+
     def closeEvent(self, event):
         self.tg_thread.stop()
         self.tg_thread.wait(1000)
+        if hasattr(self, "bridge_server") and self.bridge_server:
+            self.bridge_server.stop()
         super().closeEvent(event)
 
     def _build_ui(self):
@@ -369,6 +384,13 @@ class MainWindow(QMainWindow):
         badge_box.addWidget(self.lbl_ollama_status)
         badge_box.addWidget(self.lbl_ocr_status)
         badge_box.addWidget(self.lbl_drive_status)
+
+        self.lbl_chrome_status = QLabel("🔌 إضافة Chrome: متصل (Port 5822)")
+        self.lbl_chrome_status.setStyleSheet("background: #0284C7; color: #E0F2FE; padding: 6px 12px; border-radius: 6px; font-weight: bold; cursor: pointer;")
+        self.lbl_chrome_status.setToolTip("انقر هنا لعرض دليل تثبيت الإضافة على جوجل كروم وفتح مجلدها")
+        self.lbl_chrome_status.mousePressEvent = lambda e: self._show_chrome_extension_guide()
+        badge_box.addWidget(self.lbl_chrome_status)
+
         header_layout.addLayout(badge_box)
 
         main_layout.addWidget(header)
@@ -978,7 +1000,90 @@ class MainWindow(QMainWindow):
         i_layout.addWidget(lbl_info)
 
         layout.addWidget(info_card)
+
+        # Chrome Extension Integration Card
+        chrome_card = QFrame()
+        chrome_card.setProperty("class", "Card")
+        ch_layout = QVBoxLayout(chrome_card)
+        ch_head = QLabel("🌐 إضافة متصفح كروم (Chrome Auto-Fill & Tracker Extension)")
+        ch_head.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        ch_head.setStyleSheet("color: #38BDF8;")
+        ch_layout.addWidget(ch_head)
+
+        ch_desc = QLabel(
+            "تعبئة استمارات التقديم على الوظائف تلقائياً ببياناتك بضغطة زر واحدة "
+            "(LinkedIn Easy Apply, Workday, Greenhouse, Seek, Indeed) وتتبع الوظائف التي تم التقديم عليها مباشرة في البرنامج وإكسل.\n"
+            "• خادم الربط يعمل محلياً في الخلفية على: http://127.0.0.1:5822"
+        )
+        ch_desc.setWordWrap(True)
+        ch_desc.setStyleSheet("color: #CBD5E1; font-size: 12px;")
+        ch_layout.addWidget(ch_desc)
+
+        ch_btn_box = QHBoxLayout()
+        btn_open_ext = QPushButton("📁 فتح مجلد إضافة Chrome (لتثبيتها في المتصفح)")
+        btn_open_ext.setStyleSheet("background-color: #0284C7; font-weight: bold;")
+        btn_open_ext.clicked.connect(self._open_chrome_extension_dir)
+
+        btn_ext_guide = QPushButton("📖 شرح طريقة التثبيت في المتصفح")
+        btn_ext_guide.setStyleSheet("background-color: #334155;")
+        btn_ext_guide.clicked.connect(self._show_chrome_extension_guide)
+
+        ch_btn_box.addWidget(btn_open_ext)
+        ch_btn_box.addWidget(btn_ext_guide)
+        ch_layout.addLayout(ch_btn_box)
+
+        layout.addWidget(chrome_card)
         layout.addStretch()
+
+    def _on_chrome_job_tracked(self, job_dict: Dict[str, Any], job_id: str):
+        """Called from background HTTP server thread; emits Qt signal to update UI safely."""
+        self.chrome_job_tracked_signal.emit(job_dict, job_id)
+
+    def _handle_chrome_job_tracked_ui(self, job_dict: Dict[str, Any], job_id: str):
+        """Refreshes tracker table in UI thread and alerts user."""
+        self._load_tracked_jobs()
+        title = job_dict.get("job_title", "وظيفة جديدة")
+        company = job_dict.get("company_name", "جهة التوظيف")
+        QMessageBox.information(
+            self,
+            "تم تتبع وظيفة جديدة من Chrome 🌐",
+            f"تم تسجيل طلب التقديم بنجاح عبر إضافة المتصفح:\n\n"
+            f"📌 الوظيفة: {title}\n"
+            f"🏢 الشركة: {company}\n"
+            f"🆔 معرف التتبع: {job_id}\n\n"
+            f"تم تحديث سجل التقديمات وملف إكسل وجاري المزامنة مع Google Drive!"
+        )
+
+    def _open_chrome_extension_dir(self):
+        ext_path = Path(__file__).resolve().parent.parent.parent / "chrome_extension"
+        if ext_path.exists():
+            os.startfile(str(ext_path))
+        else:
+            QMessageBox.warning(self, "خطأ", f"لم يتم العثور على مجلد الإضافة:\n{ext_path}")
+
+    def _show_chrome_extension_guide(self):
+        ext_path = Path(__file__).resolve().parent.parent.parent / "chrome_extension"
+        msg = (
+            "<h3>🚀 طريقة تثبيت إضافة CV Servant على متصفح جوجل كروم (خلال دقيقة واحدة):</h3>"
+            "<ol>"
+            "<li>افتح متصفح <b>Google Chrome</b> واكتب في شريط العنوان:<br><code>chrome://extensions/</code></li>"
+            "<li>قم بتفعيل خيار <b>وضع مطور البرامج (Developer mode)</b> في الزاوية العلوية للمتصفح.</li>"
+            "<li>اضغط على زر <b>تحميل حزمة غير مضغوطة (Load unpacked)</b>.</li>"
+            f"<li>اختر المجلد التالي من جهازك:<br><code>{ext_path}</code></li>"
+            "</ol>"
+            "<p><b>مميزات الإضافة:</b><br>"
+            "• زر عائم ذكي <b>⚡ تعبئة النموذج</b> داخل صفحات التوظيف (LinkedIn, Workday, Greenhouse, Seek, Indeed).<br>"
+            "• زر <b>📌 تتبع التقديم</b> لتسجيل الوظيفة فوراً في جدول البرنامج وإكسل وجوجل درايف بنقرة واحدة!</p>"
+        )
+        box = QMessageBox(self)
+        box.setWindowTitle("دليل تثبيت إضافة كروم")
+        box.setTextFormat(Qt.RichText)
+        box.setText(msg)
+        btn_open = box.addButton("📁 فتح مجلد الإضافة الآن", QMessageBox.ActionRole)
+        box.addButton("إغلاق", QMessageBox.AcceptRole)
+        box.exec()
+        if box.clickedButton() == btn_open:
+            self._open_chrome_extension_dir()
 
     def _load_env_to_inputs(self):
         from cv_servant.config import ENV_PATH

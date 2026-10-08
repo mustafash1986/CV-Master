@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CV Servant Assistant</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="branding">
+        <div class="logo-icon">CV</div>
+        <div class="title-group">
+          <h1>CV Servant</h1>
+          <span class="subtitle">المساعد الذكي لتعبئة وتتبع الوظائف</span>
+        </div>
+      </div>
+      <div id="connection-status" class="status-badge status-checking">
+        <span class="status-indicator"></span>
+        <span id="status-text">جاري الفحص...</span>
+      </div>
+    </header>
+
+    <!-- Active Job Card -->
+    <section class="card job-card">
+      <div class="card-header">
+        <span class="card-icon">🎯</span>
+        <h2>الوظيفة الحالية المكتشفة</h2>
+        <span id="job-platform" class="platform-tag">صفحة ويب</span>
+      </div>
+      <div class="job-details">
+        <div class="job-title-row">
+          <span class="label">المسمى:</span>
+          <span id="detected-job-title" class="value highlight">جاري الفحص...</span>
+        </div>
+        <div class="job-company-row">
+          <span class="label">الشركة:</span>
+          <span id="detected-company" class="value">غير محدد</span>
+        </div>
+      </div>
+
+      <div class="action-buttons-grid">
+        <button id="btn-autofill" class="btn btn-primary" title="تعبئة كافة حقول النموذج تلقائياً ببياناتك">
+          <span class="btn-icon">⚡</span>
+          <span>تعبئة النموذج تلقائياً</span>
+        </button>
+        <button id="btn-track" class="btn btn-success" title="تسجيل هذه الوظيفة في سجل إكسل بتطبيق CV Servant">
+          <span class="btn-icon">📌</span>
+          <span>تسجيل كـ تم التقديم</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Quick Copy Toolkit -->
+    <section class="card quick-copy-card">
+      <div class="card-header">
+        <span class="card-icon">📋</span>
+        <h2>النسخ السريع للبيانات (بنقرة واحدة)</h2>
+      </div>
+      <div class="copy-grid">
+        <button class="copy-pill" data-copy="arch.mustafa.mahmoud.2007@gmail.com">
+          <span>📧 البريد الإلكتروني</span>
+        </button>
+        <button class="copy-pill" data-copy="+965 9919 1358">
+          <span>📞 رقم الهاتف</span>
+        </button>
+        <button class="copy-pill" data-copy="https://www.linkedin.com/in/mostafamahmoud-architect">
+          <span>💼 رابط LinkedIn</span>
+        </button>
+        <button class="copy-pill" data-copy="https://mustafash1986.github.io/mustafa-portfolio1/">
+          <span>🌐 رابط البورتفوليو</span>
+        </button>
+        <button class="copy-pill" data-copy="PMP #3010938 (PMI - Valid through May 2027)">
+          <span>🏆 رخصة الـ PMP</span>
+        </button>
+        <button class="copy-pill" data-copy="Autodesk Certified Professional: Revit Architecture #00424122">
+          <span>📐 شهادة أوتوديسك</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Candidate Profile Preview -->
+    <footer class="candidate-footer">
+      <div class="candidate-info">
+        <span class="candidate-name">المهندس مصطفى محمود شوقي</span>
+        <span class="candidate-title">Senior Architect & BIM Manager • 19 سنة خبرة</span>
+      </div>
+    </footer>
+
+    <!-- Feedback Message Toast -->
+    <div id="popup-toast" class="popup-toast"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
