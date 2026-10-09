@@ -1,8 +1,7 @@
 /**
  * CV Servant - Smart Job Auto-Fill & Tracker Content Script
- * High-intelligence form matching for SmartRecruiters, Workday, Taleo, Greenhouse,
- * Lever, LinkedIn, Seek, Indeed, and modern ATS job application portals.
- * Fully supports preliminary questionnaires and screening forms.
+ * High-precision two-way autofill engine supporting SmartRecruiters OneClick,
+ * Workday, Taleo, Greenhouse, Lever, LinkedIn, Seek, and Indeed.
  */
 
 (function () {
@@ -21,11 +20,9 @@
           candidateData = Object.assign({}, candidateData || {}, response.profile);
         }
       });
-    } catch (e) {
-      // Background context check
-    }
+    } catch (e) {}
 
-    // Inject floating widget
+    // Inject floating widget ONLY on top window (never in iframes!)
     checkAndInjectFloatingWidget();
 
     // Listen for trigger messages from popup or background
@@ -59,7 +56,7 @@
 
     const hasDomain = jobDomains.some((d) => hostname.includes(d));
     const hasJobWords = url.includes("job") || url.includes("career") || url.includes("apply") || url.includes("screening") || url.includes("publication");
-    const hasFormWords = text.includes("apply") || text.includes("resume") || text.includes("cv") || text.includes("nationality") || text.includes("experience") || text.includes("questions");
+    const hasFormWords = text.includes("apply") || text.includes("resume") || text.includes("cv") || text.includes("first name") || text.includes("personal information");
 
     return hasDomain || hasJobWords || hasFormWords;
   }
@@ -78,6 +75,9 @@
 
       const srTitle = document.querySelector(".job-title, [data-qa='job-title'], h1, .c-header__title");
       if (srTitle) title = srTitle.innerText.trim();
+
+      const srLoc = document.querySelector(".job-location, [data-qa='job-location'], .c-header__meta");
+      if (srLoc) location = srLoc.innerText.trim();
     }
 
     // 2. Workday specific
@@ -90,23 +90,8 @@
       if (wdComp) company = wdComp.innerText.trim();
     }
 
-    // 3. LinkedIn specific
-    if (!title && window.location.hostname.includes("linkedin.com")) {
-      const titleElem = document.querySelector(".jobs-unified-top-card__job-title, .job-details-jobs-unified-top-card__job-title, h1.t-24, h1");
-      if (titleElem) title = titleElem.innerText.trim();
-
-      const compElem = document.querySelector(".jobs-unified-top-card__company-name, .job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__subtitle-primary a");
-      if (compElem) company = compElem.innerText.trim();
-    }
-
-    // 4. General fallbacks
-    if (!title) {
-      const h1 = document.querySelector("h1, .job-title, [data-qa='job-title']");
-      if (h1) title = h1.innerText.trim();
-    }
-
+    // 3. Fallbacks
     if (!company) {
-      // Check URL path (e.g. /company/AECOM2/...)
       const mComp = url.match(/\/company\/([^/]+)/i);
       if (mComp) {
         company = mComp[1].replace(/\d+$/, "");
@@ -150,335 +135,347 @@
       element.value = valueToSet;
     }
 
-    // Dispatch full cycle of synthetic events so character counters (e.g. 0/200) update immediately
+    // Dispatch full cycle of synthetic events so character counters and validations update immediately
     element.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
     element.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
     element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
     element.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "Enter" }));
     element.dispatchEvent(new Event("blur", { bubbles: true, cancelable: true }));
 
-    // Visual feedback highlight
+    // Visual green feedback highlight
     element.style.transition = "all 0.3s ease";
     element.style.backgroundColor = "rgba(16, 185, 129, 0.15)";
     element.style.borderColor = "#10B981";
   }
 
-  // Deep inspection to locate the exact question prompt / title for this field
-  function getFieldQuestionTitle(field) {
-    let parts = [];
-
-    // 1. Direct attributes
-    if (field.getAttribute("aria-label")) parts.push(field.getAttribute("aria-label"));
-    if (field.getAttribute("placeholder")) parts.push(field.getAttribute("placeholder"));
-    if (field.id) parts.push(field.id);
-    if (field.name) parts.push(field.name);
-    if (field.getAttribute("data-qa")) parts.push(field.getAttribute("data-qa"));
-    if (field.getAttribute("data-automation-id")) parts.push(field.getAttribute("data-automation-id"));
+  // Locates the EXACT direct label for a specific field (without section bleeding)
+  function getExactFieldLabel(field) {
+    // 1. Direct field attributes
+    let directTokens = [];
+    if (field.getAttribute("aria-label")) directTokens.push(field.getAttribute("aria-label"));
+    if (field.getAttribute("placeholder")) directTokens.push(field.getAttribute("placeholder"));
+    if (field.getAttribute("data-qa")) directTokens.push(field.getAttribute("data-qa"));
+    if (field.getAttribute("data-automation-id")) directTokens.push(field.getAttribute("data-automation-id"));
+    if (field.name) directTokens.push(field.name);
+    if (field.id) directTokens.push(field.id);
 
     // 2. aria-labelledby
     const lblBy = field.getAttribute("aria-labelledby");
     if (lblBy) {
       lblBy.split(/\s+/).forEach((id) => {
         const el = document.getElementById(id);
-        if (el) parts.push(el.innerText || "");
+        if (el && el.innerText) directTokens.push(el.innerText.trim());
       });
     }
 
-    // 3. Associated <label for="...">
+    // 3. Associated <label for="field.id">
     if (field.id) {
       try {
         const lbl = document.querySelector(`label[for="${CSS.escape(field.id)}"]`);
-        if (lbl) parts.push(lbl.innerText || "");
+        if (lbl && lbl.innerText) return lbl.innerText.trim().toLowerCase();
       } catch (e) {}
     }
 
-    // 4. Check preceding siblings of field and its parent wrappers
-    // In SmartRecruiters, the question title is directly above the input container
-    let p = field;
-    for (let i = 0; i < 4; i++) {
-      if (!p) break;
-      let prev = p.previousElementSibling;
-      while (prev) {
-        const txt = (prev.innerText || "").trim();
-        if (txt && !txt.match(/^\d+\s*\/\s*\d+$/) && txt.length < 250) {
-          parts.push(txt);
-        }
-        prev = prev.previousElementSibling;
-      }
-      p = p.parentElement;
+    // 4. Parent <label>
+    const parentLabel = field.closest("label");
+    if (parentLabel && parentLabel.innerText) {
+      return parentLabel.innerText.trim().toLowerCase();
     }
 
-    // 5. Container search (SmartRecruiters OneClick questionnaire blocks)
-    let container = field.closest(
-      ".c-question, .question, .form-group, .screening-question, .c-form-item, [class*='question'], [class*='screening'], [class*='field'], section, fieldset, li, tr, div"
-    );
-
-    let depth = 0;
-    while (container && depth < 6 && container !== document.body) {
-      const headings = container.querySelectorAll(
-        "h1, h2, h3, h4, h5, label, legend, [class*='title'], [class*='header'], [class*='label'], p, span"
+    // 5. Immediate wrapper search (SmartRecruiters OneClick structure)
+    // <div class="c-form-item"> (or c-input)
+    //   <label class="c-label">First name*</label>
+    //   <input ...>
+    // </div>
+    let wrapper = field.parentElement;
+    for (let i = 0; i < 4 && wrapper; i++) {
+      // Find a label or title that belongs directly to this input's immediate wrapper
+      const directLbl = wrapper.querySelector(
+        ":scope > label, :scope > .c-label, :scope > .label, :scope > .c-question__header, :scope > h3, :scope > h4, :scope > p.label"
       );
-      headings.forEach((h) => {
-        const ht = (h.innerText || "").trim();
-        // Ignore character counters and small symbols
-        if (ht && !ht.match(/^\d+\s*\/\s*\d+$/) && ht.length > 3 && ht.length < 300) {
-          parts.push(ht);
+      if (directLbl && directLbl.innerText) {
+        const t = directLbl.innerText.trim().toLowerCase();
+        if (!t.match(/^\d+\s*\/\s*\d+$/) && t.length < 120) {
+          return t;
         }
-      });
+      }
 
-      if (container.classList && (container.classList.contains("c-question") || container.classList.contains("question") || container.classList.contains("screening-question"))) {
+      // Check immediate previous sibling of the input's wrapper
+      const prev = wrapper.previousElementSibling;
+      if (prev && prev.innerText) {
+        const pt = prev.innerText.trim().toLowerCase();
+        if (!pt.match(/^\d+\s*\/\s*\d+$/) && pt.length < 150) {
+          // If the previous element is a label or small title, return it
+          if (prev.tagName === "LABEL" || prev.tagName === "H3" || prev.tagName === "H4" || prev.tagName === "P" || prev.classList.contains("c-label")) {
+            return pt;
+          }
+        }
+      }
+
+      // Stop before climbing out to the entire section or form!
+      if (wrapper.tagName === "SECTION" || wrapper.tagName === "FORM" || wrapper.classList.contains("c-section")) {
         break;
       }
-      container = container.parentElement;
-      depth++;
+      wrapper = wrapper.parentElement;
     }
 
-    return parts.join(" ").toLowerCase();
+    if (directTokens.length > 0) {
+      return directTokens.join(" ").toLowerCase();
+    }
+
+    return "";
   }
 
-  // Matches any questionnaire or standard form field to the candidate's exact profile answer
-  function getAnswerForField(field) {
-    const text = getFieldQuestionTitle(field);
-    console.log(`[CV Servant AutoFill] Field context: "${text.slice(0, 120)}"`);
+  // Matches a label to the candidate's exact profile answer
+  function getAnswerForLabel(label, field) {
+    label = (label || "").toLowerCase();
 
-    // --- SMARTRECRUITERS / AECOM PRELIMINARY QUESTIONS ---
-
-    // 1. Nationality
-    if (text.includes("nationality") || text.includes("citizenship") || text.includes("الجنسية")) {
-      return candidateData.nationality || "Egyptian";
+    // 1. Confirm Email (must be checked before regular email!)
+    if (label.includes("confirm") && label.includes("email")) {
+      return candidateData.email || "arch.mustafa.mahmoud.2007@gmail.com";
     }
 
-    // 2. Current Location / Country of residence
+    // 2. Email Address
     if (
-      (text.includes("location") || text.includes("residence") || text.includes("where do you live") || text.includes("reside")) &&
-      (text.includes("current") || text.includes("present") || text.includes("country"))
+      label.includes("email") ||
+      label.includes("e-mail") ||
+      field.type === "email" ||
+      label.includes("البريد") ||
+      label.includes("الإيميل")
     ) {
-      return candidateData.current_location || "Kuwait";
+      return candidateData.email || "arch.mustafa.mahmoud.2007@gmail.com";
     }
 
-    // 3. Family / Marital Status
-    if (text.includes("family status") || text.includes("marital status") || text.includes("marital") || text.includes("الحالة الاجتماعية")) {
-      return candidateData.family_status || "Married";
-    }
-
-    // 4. Family living in Saudi Arabia
-    if (text.includes("family") && (text.includes("live with you") || text.includes("saudi"))) {
-      return candidateData.family_in_saudi || "No";
-    }
-
-    // 5. Date of Birth / Birthday
-    if (text.includes("date of birth") || text.includes("birth date") || text.includes("dob") || text.includes("birthday") || text.includes("تاريخ الميلاد")) {
-      return candidateData.date_of_birth || "15/07/1986";
-    }
-
-    // 6. Professional Title in Iqama
+    // 3. First Name
     if (
-      (text.includes("professional title") || text.includes("title in iqama")) ||
-      (text.includes("title") && text.includes("iqama"))
-    ) {
-      return candidateData.iqama_title || "N/A";
-    }
-
-    // 7. Saudi Legal Residency Permit / Valid Iqama
-    if (
-      (text.includes("residency permit") || text.includes("legal residency") || text.includes("valid iqama") || text.includes("iqama")) &&
-      (text.includes("saudi") || text.includes("ksa") || text.includes("permit"))
-    ) {
-      return candidateData.saudi_residency || "No";
-    }
-
-    // 8. Total Years of Experience overall
-    if (
-      (text.includes("total years of experience overall") || text.includes("years of experience overall") || text.includes("total years of experience") || text.includes("experience overall")) ||
-      (text.includes("total") && text.includes("years") && text.includes("experience"))
-    ) {
-      return candidateData.total_experience_years || "19";
-    }
-
-    // 9. Total Years of Experience in GCC
-    if (
-      (text.includes("experience in gcc") || text.includes("years in gcc") || text.includes("gcc experience") || text.includes("experience overall in gcc")) ||
-      (text.includes("years") && text.includes("gcc"))
-    ) {
-      return candidateData.gcc_experience_years || "17";
-    }
-
-    // 10. Worked with AECOM / Company before
-    if (
-      text.includes("worked with aecom") ||
-      text.includes("worked for aecom") ||
-      text.includes("worked with us before") ||
-      text.includes("worked with company before") ||
-      text.includes("previously employed") ||
-      text.includes("previous employee")
-    ) {
-      return candidateData.worked_with_company_before || "No";
-    }
-
-    // 11. Relation or family member working for AECOM / Company
-    if (
-      text.includes("relation or family member") ||
-      text.includes("relative working") ||
-      text.includes("family member working") ||
-      text.includes("relatives in company") ||
-      text.includes("family member")
-    ) {
-      return candidateData.relatives_in_company || "No";
-    }
-
-    // 12. Monthly Salary Expectation (USD)
-    if (
-      text.includes("monthly salary expectation") ||
-      text.includes("salary expectation (usd)") ||
-      text.includes("salary expectation") ||
-      text.includes("expected salary") ||
-      text.includes("monthly salary") ||
-      text.includes("salary (usd)")
-    ) {
-      return candidateData.salary_expectation_usd || "5000";
-    }
-
-    // 13. Highest Educational Degree earned
-    if (
-      text.includes("highest educational degree") ||
-      text.includes("educational degree") ||
-      text.includes("highest degree") ||
-      text.includes("degree you have earned") ||
-      text.includes("education level") ||
-      text.includes("أعلى مؤهل")
-    ) {
-      return candidateData.highest_degree || "Bachelor's Degree";
-    }
-
-    // 14. Year of Graduation
-    if (
-      text.includes("year of graduation") ||
-      text.includes("graduation year") ||
-      text.includes("year of grad") ||
-      text.includes("grad year") ||
-      text.includes("سنة التخرج")
-    ) {
-      return candidateData.graduation_year || "2007";
-    }
-
-    // --- STANDARD PERSONAL INFO FIELDS ---
-
-    // First Name
-    if (
-      text.includes("first_name") ||
-      text.includes("firstname") ||
-      text.includes("first name") ||
-      text.includes("given name") ||
-      text.includes("legalnamesection_firstname") ||
-      text.includes("الاسم الأول")
+      label.includes("first name") ||
+      label.includes("firstname") ||
+      label.includes("first_name") ||
+      label.includes("given name") ||
+      label.includes("fname") ||
+      label.includes("legalnamesection_firstname") ||
+      label.includes("الاسم الأول")
     ) {
       return candidateData.first_name || "Mustafa";
     }
 
-    // Last Name
+    // 4. Last Name / Surname / Family Name
     if (
-      text.includes("last_name") ||
-      text.includes("lastname") ||
-      text.includes("last name") ||
-      text.includes("surname") ||
-      text.includes("family name") ||
-      text.includes("legalnamesection_lastname") ||
-      text.includes("اسم العائلة")
+      label.includes("last name") ||
+      label.includes("lastname") ||
+      label.includes("last_name") ||
+      label.includes("surname") ||
+      label.includes("family name") ||
+      label.includes("family_name") ||
+      label.includes("lname") ||
+      label.includes("legalnamesection_lastname") ||
+      label.includes("اسم العائلة") ||
+      label.includes("الاسم الأخير")
     ) {
       return candidateData.last_name || "Shawky";
     }
 
-    // Full Name
+    // 5. Middle Name
+    if (label.includes("middle name") || label.includes("middlename") || label.includes("الاسم الأوسط")) {
+      return candidateData.middle_name || "Mahmoud";
+    }
+
+    // 6. Full Name
     if (
-      text.includes("full_name") ||
-      text.includes("fullname") ||
-      text.includes("full name") ||
-      text.includes("applicant name") ||
-      text.includes("candidate name") ||
-      text.includes("الاسم بالكامل")
+      label.includes("full name") ||
+      label.includes("fullname") ||
+      label.includes("candidate name") ||
+      label.includes("applicant name") ||
+      label.includes("your name") ||
+      label.includes("الاسم بالكامل")
     ) {
       return candidateData.full_name || "Mustafa Mahmoud Shawky";
     }
 
-    // Email
-    if (text.includes("email") || text.includes("e-mail") || field.type === "email" || text.includes("البريد")) {
-      return candidateData.email || "arch.mustafa.mahmoud.2007@gmail.com";
-    }
-
-    // Phone
-    if (
-      text.includes("phone") ||
-      text.includes("mobile") ||
-      text.includes("cell") ||
-      text.includes("tel") ||
-      text.includes("contact number") ||
-      field.type === "tel" ||
-      text.includes("الهاتف") ||
-      text.includes("الجوال")
-    ) {
-      return candidateData.phone || "+965 9919 1358";
-    }
-
-    // Phone Country Code
-    if (text.includes("country code") || text.includes("dial code")) {
+    // 7. Phone Country / Dial Code
+    if (label.includes("country code") || label.includes("dial code")) {
       return candidateData.phone_country_code || "+965";
     }
 
-    // LinkedIn
-    if (text.includes("linkedin") || text.includes("لينكد")) {
+    // 8. Phone Number (SmartRecruiters & Workday)
+    if (
+      label.includes("phone number") ||
+      label.includes("phone") ||
+      label.includes("mobile") ||
+      label.includes("cell") ||
+      label.includes("tel") ||
+      label.includes("contact number") ||
+      field.type === "tel" ||
+      label.includes("الهاتف") ||
+      label.includes("الجوال")
+    ) {
+      // If there is an international flag/dial dropdown right next to it (+965), fill national number
+      const hasFlag = field.closest(".c-phone, .input-group, div")?.querySelector(".iti__selected-flag, .c-phone__country, [class*='dial'], select");
+      if (hasFlag) {
+        return candidateData.phone_national || "99191358";
+      }
+      return candidateData.phone || "+965 9919 1358";
+    }
+
+    // 9. City / Suburb (SmartRecruiters City* field)
+    if (
+      label.includes("city") ||
+      label.includes("town") ||
+      label.includes("suburb") ||
+      label.includes("المدينة")
+    ) {
+      return candidateData.city || "Sabah Elsalem";
+    }
+
+    // 10. LinkedIn URL
+    if (label.includes("linkedin") || label.includes("لينكد")) {
       return candidateData.linkedin;
     }
 
-    // Portfolio / Website
-    if (text.includes("portfolio") || text.includes("website") || text.includes("personal site") || text.includes("بورتفوليو")) {
+    // 11. Portfolio / Website / Personal URL
+    if (
+      label.includes("portfolio") ||
+      label.includes("website") ||
+      label.includes("personal site") ||
+      label.includes("personal url") ||
+      label.includes("web link") ||
+      label.includes("بورتفوليو") ||
+      label.includes("معرض الأعمال")
+    ) {
       return candidateData.portfolio;
     }
 
-    // Current Employer / Company
-    if (text.includes("current company") || text.includes("current employer") || text.includes("organization")) {
+    // 12. Address Line / Street
+    if (label.includes("address") || label.includes("street") || label.includes("العنوان") || label.includes("الشارع")) {
+      return candidateData.address || "Sabah Elsalem";
+    }
+
+    // 13. Postal Code / Zip
+    if (label.includes("postal") || label.includes("zip") || label.includes("postcode") || label.includes("الرمز البريدي")) {
+      return candidateData.postal_code || "44000";
+    }
+
+    // 14. Nationality / Citizenship
+    if (label.includes("nationality") || label.includes("citizenship") || label.includes("الجنسية")) {
+      return candidateData.nationality || "Egyptian";
+    }
+
+    // 15. Current Location / Residence
+    if (
+      label.includes("current location") ||
+      label.includes("where do you live") ||
+      label.includes("residence") ||
+      label.includes("مكان الإقامة") ||
+      (label.includes("location") && !label.includes("relocate"))
+    ) {
+      return candidateData.current_location || "Kuwait";
+    }
+
+    // 16. Family / Marital Status
+    if (label.includes("family status") || label.includes("marital status") || label.includes("marital") || label.includes("الحالة الاجتماعية")) {
+      return candidateData.family_status || "Married";
+    }
+
+    // 17. Family Living in Saudi Arabia
+    if (label.includes("family") && (label.includes("live with you") || label.includes("saudi"))) {
+      return "No";
+    }
+
+    // 18. Date of Birth / Birthday
+    if (label.includes("date of birth") || label.includes("birth date") || label.includes("dob") || label.includes("birthday") || label.includes("تاريخ الميلاد")) {
+      return candidateData.date_of_birth || "15/07/1986";
+    }
+
+    // 19. Professional Title in Iqama
+    if (label.includes("professional title") || (label.includes("title") && label.includes("iqama"))) {
+      return "N/A";
+    }
+
+    // 20. Saudi Residency Permit / Valid Iqama
+    if ((label.includes("residency permit") || label.includes("legal residency") || label.includes("iqama")) && (label.includes("saudi") || label.includes("ksa"))) {
+      return "No";
+    }
+
+    // 21. Total Years of Experience overall
+    if (label.includes("total years") || (label.includes("years of experience") && label.includes("overall")) || label.includes("total experience")) {
+      return candidateData.total_experience_years || "19";
+    }
+
+    // 22. Total Years of Experience in GCC
+    if (label.includes("gcc") && (label.includes("experience") || label.includes("years"))) {
+      return candidateData.gcc_experience_years || "17";
+    }
+
+    // 23. Worked with AECOM / Company before
+    if (label.includes("worked with") || label.includes("worked for") || label.includes("previously employed")) {
+      return "No";
+    }
+
+    // 24. Relation / Family member working for AECOM
+    if (label.includes("relation") || label.includes("family member") || label.includes("relative")) {
+      return "No";
+    }
+
+    // 25. Monthly Salary Expectation (USD)
+    if (label.includes("salary") || label.includes("compensation") || label.includes("remuneration") || label.includes("الراتب")) {
+      return candidateData.salary_expectation_usd || "5000";
+    }
+
+    // 26. Highest Educational Degree
+    if (label.includes("highest") && (label.includes("degree") || label.includes("education") || label.includes("qualification"))) {
+      return candidateData.highest_degree || "Bachelor's Degree";
+    }
+
+    // 27. Year of Graduation
+    if (label.includes("graduation") || label.includes("graduating") || label.includes("year of grad") || label.includes("سنة التخرج")) {
+      return candidateData.graduation_year || "2007";
+    }
+
+    // 28. Current Employer / Company
+    if (label.includes("current company") || label.includes("current employer") || label.includes("الشركة الحالية")) {
       return candidateData.current_company || "Pace";
     }
 
-    // Current Job Title
-    if (text.includes("job title") || text.includes("current title") || text.includes("current role") || text.includes("designation")) {
+    // 29. Current Job Title
+    if (label.includes("job title") || label.includes("current title") || label.includes("المسمى الوظيفي")) {
       return candidateData.current_title || "Senior Architect & BIM Specialist";
     }
 
-    // General Technical Skills (Revit / BIM / CAD)
-    if (text.includes("revit") || text.includes("ريفيت")) {
+    // 30. Revit / BIM / CAD Experience
+    if (label.includes("revit") || label.includes("ريفيت")) {
       return candidateData.revit_experience_years || "16";
     }
-    if (text.includes("bim") || text.includes("بيم")) {
+    if (label.includes("bim") || label.includes("بيم")) {
       return candidateData.bim_experience_years || "15";
     }
-    if (text.includes("autocad") || text.includes("cad") || text.includes("أوتوكاد")) {
+    if (label.includes("autocad") || label.includes("cad") || label.includes("أوتوكاد")) {
       return candidateData.autocad_experience_years || "19";
     }
 
-    // PMP Certification
-    if (text.includes("pmp")) {
+    // 31. PMP Certification
+    if (label.includes("pmp")) {
       return candidateData.pmp_certified || "Yes";
     }
 
-    // Notice Period / Availability
-    if (text.includes("notice") || text.includes("availability") || text.includes("start date") || text.includes("commence")) {
+    // 32. Notice Period / Availability
+    if (label.includes("notice") || label.includes("availability") || label.includes("start date")) {
       return candidateData.notice_period || "1 Month";
     }
 
-    // Cover letter / Summary
-    if (text.includes("cover letter") || text.includes("cover_letter") || text.includes("summary") || text.includes("bio") || text.includes("why hire")) {
+    // 33. Cover Letter / Summary / Bio
+    if (label.includes("cover letter") || label.includes("summary") || label.includes("about yourself") || label.includes("bio")) {
       return candidateData.summary;
     }
 
-    // General Visa Sponsorship question
-    if (text.includes("sponsor") || text.includes("visa sponsorship") || text.includes("work authorization")) {
+    // 34. Visa Sponsorship
+    if (label.includes("sponsor") || label.includes("visa") || label.includes("work authorization")) {
       return candidateData.common_answers?.sponsorship || "Yes";
     }
 
     return null;
   }
 
-  // Executes form autofill across inputs, textareas, and selects
+  // Executes form autofill using two-way matching (Label-Driven + Input-Driven)
   async function performAutoFill() {
     if (!candidateData) {
       if (typeof DEFAULT_CANDIDATE_PROFILE !== "undefined") {
@@ -487,75 +484,83 @@
     }
 
     let filledCount = 0;
+    const handledInputs = new Set();
 
-    // Grab all interactive inputs, textareas, and selects
-    const inputs = document.querySelectorAll(
+    // Strategy 1: Label-driven search
+    // Find every visible <label> on the page and match its target input
+    const allLabels = document.querySelectorAll("label, .c-label, [data-qa='form-label']");
+    allLabels.forEach((lbl) => {
+      const labelText = (lbl.innerText || "").trim();
+      if (!labelText || labelText.length < 2) return;
+
+      // Find input associated with this label
+      let targetInput = null;
+      if (lbl.htmlFor) {
+        targetInput = document.getElementById(lbl.htmlFor);
+      }
+      if (!targetInput) {
+        targetInput = lbl.querySelector("input, textarea, select");
+      }
+      if (!targetInput) {
+        // Look in parent container
+        const parent = lbl.parentElement;
+        if (parent) {
+          targetInput = parent.querySelector("input:not([type='hidden']):not([type='submit']):not([type='file']), textarea, select");
+        }
+      }
+      if (!targetInput && lbl.nextElementSibling) {
+        if (["INPUT", "TEXTAREA", "SELECT"].includes(lbl.nextElementSibling.tagName)) {
+          targetInput = lbl.nextElementSibling;
+        } else {
+          targetInput = lbl.nextElementSibling.querySelector("input, textarea, select");
+        }
+      }
+
+      if (targetInput && !handledInputs.has(targetInput)) {
+        // Don't overwrite if user already typed custom content
+        if (!targetInput.value || targetInput.value.trim().length === 0 || targetInput.type === "select-one") {
+          const answer = getAnswerForLabel(labelText, targetInput);
+          if (answer !== null && answer !== undefined) {
+            applyAnswerToElement(targetInput, answer);
+            handledInputs.add(targetInput);
+            filledCount++;
+          }
+        }
+      }
+    });
+
+    // Strategy 2: Input-driven search (for all remaining unhandled inputs)
+    const allInputs = document.querySelectorAll(
       "input:not([type='hidden']):not([type='submit']):not([type='file']):not([type='button']), textarea, select"
     );
 
-    console.log(`[CV Servant AutoFill] Total inputs detected: ${inputs.length}`);
+    for (let i = 0; i < allInputs.length; i++) {
+      const elem = allInputs[i];
+      if (handledInputs.has(elem)) continue;
 
-    for (let i = 0; i < inputs.length; i++) {
-      const elem = inputs[i];
-
-      // Skip inputs that already have user-entered text (unless empty or spaces)
       if (elem.value && elem.value.trim().length > 0 && elem.type !== "select-one") {
         continue;
       }
 
-      const answer = getAnswerForField(elem);
-      if (answer === null || answer === undefined) continue;
+      const exactLabel = getExactFieldLabel(elem);
+      if (!exactLabel) continue;
 
-      console.log(`[CV Servant AutoFill] Matching input #${i} => "${answer}"`);
-
-      if (elem.tagName.toLowerCase() === "select") {
-        // Standard <select> dropdown
-        let found = false;
-        const targetStr = String(answer).toLowerCase();
-        for (let opt of elem.options) {
-          const optText = opt.text.toLowerCase();
-          const optVal = opt.value.toLowerCase();
-          if (optText.includes(targetStr) || optVal.includes(targetStr)) {
-            elem.value = opt.value;
-            elem.dispatchEvent(new Event("change", { bubbles: true }));
-            found = true;
-            break;
-          }
-        }
-        if (found) filledCount++;
-      } else {
-        // Text input / Search input / Textarea
-        setNativeValue(elem, answer);
+      const answer = getAnswerForLabel(exactLabel, elem);
+      if (answer !== null && answer !== undefined) {
+        applyAnswerToElement(elem, answer);
+        handledInputs.add(elem);
         filledCount++;
-
-        // For SmartRecruiters search inputs with 🔍 dropdowns:
-        // Try finding and clicking the matching dropdown item if an overlay appears
-        await new Promise((r) => setTimeout(r, 60));
-        try {
-          const suggestions = document.querySelectorAll(
-            "[role='listbox'] [role='option'], .select-options li, .suggestions li, [data-qa='select-option'], .dropdown-item, .c-select__option"
-          );
-          if (suggestions.length > 0) {
-            const targetLower = String(answer).toLowerCase();
-            for (let opt of suggestions) {
-              if (opt.innerText && opt.innerText.toLowerCase().includes(targetLower)) {
-                opt.click();
-                break;
-              }
-            }
-          }
-        } catch (e) {}
       }
     }
 
-    // Handle Radio buttons (Yes / No questions)
+    // Strategy 3: Radio buttons (Yes / No questions)
     const radioGroups = document.querySelectorAll("input[type='radio']");
     radioGroups.forEach((radio) => {
-      const label = radio.parentElement ? radio.parentElement.innerText.toLowerCase() : "";
+      const label = (radio.parentElement ? radio.parentElement.innerText : "").toLowerCase();
       const val = (radio.value || "").toLowerCase();
-      const questionText = radio.closest(".c-question, .question, fieldset, .form-group, div")?.innerText.toLowerCase() || "";
+      const questionText = (radio.closest(".c-question, .question, fieldset, .form-group, div")?.innerText || "").toLowerCase();
 
-      // Auto check "No" for AECOM worked before or relatives
+      // Check "No" for AECOM worked before or relatives
       if (
         (questionText.includes("worked with aecom") || questionText.includes("relation or family member")) &&
         (label.includes("no") || val === "no" || val === "false")
@@ -563,7 +568,7 @@
         radio.click();
         filledCount++;
       }
-      // Auto check "Yes" for positive legal qualifications
+      // Check "Yes" for positive legal qualifications
       else if (
         (questionText.includes("18") || questionText.includes("relocate") || questionText.includes("license")) &&
         (label.includes("yes") || val === "yes" || val === "true")
@@ -574,12 +579,50 @@
     });
 
     if (filledCount > 0) {
-      showToast(`⚡ تم تعبئة ${filledCount} حقلاً بنجاح عبر CV Servant!`, "success");
+      showToast(`⚡ تم تعبئة ${filledCount} حقول بنجاح عبر CV Servant!`, "success");
     } else {
-      showToast("ℹ️ تم فحص الحقول. تأكد من ظهور أسئلة استمارة التقديم على الشاشة.", "warning");
+      showToast("ℹ️ تم فحص الحقول. تأكد من ظهور استمارة التقديم على الشاشة.", "warning");
     }
 
     return { filled: filledCount };
+  }
+
+  // Applies an answer value to input, textarea, or select element
+  function applyAnswerToElement(elem, value) {
+    if (elem.tagName.toLowerCase() === "select") {
+      let found = false;
+      const targetStr = String(value).toLowerCase();
+      for (let opt of elem.options) {
+        const optText = opt.text.toLowerCase();
+        const optVal = opt.value.toLowerCase();
+        if (optText.includes(targetStr) || optVal.includes(targetStr)) {
+          elem.value = opt.value;
+          elem.dispatchEvent(new Event("change", { bubbles: true }));
+          found = true;
+          break;
+        }
+      }
+    } else {
+      setNativeValue(elem, value);
+
+      // Handle SmartRecruiters City or search dropdown overlay if one appears
+      setTimeout(() => {
+        try {
+          const suggestions = document.querySelectorAll(
+            "[role='listbox'] [role='option'], .select-options li, .suggestions li, [data-qa='select-option'], .c-select__option"
+          );
+          if (suggestions.length > 0) {
+            const targetLower = String(value).toLowerCase();
+            for (let opt of suggestions) {
+              if (opt.innerText && opt.innerText.toLowerCase().includes(targetLower)) {
+                opt.click();
+                break;
+              }
+            }
+          }
+        } catch (e) {}
+      }, 80);
+    }
   }
 
   // Sends the current page's job info to CV Servant desktop tracker
@@ -607,10 +650,19 @@
     });
   }
 
-  // Floating widget injection
+  // Floating widget injection (STRICTLY ON TOP WINDOW - NEVER IN IFRAMES)
   function checkAndInjectFloatingWidget() {
+    // PREVENT DUPLICATES: Only top window gets floating widget!
+    if (window.self !== window.top) {
+      return;
+    }
+
     if (isFloatingWidgetInjected || !isJobPage()) return;
     isFloatingWidgetInjected = true;
+
+    // Remove any legacy instance
+    const old = document.getElementById("cv-servant-floating-panel");
+    if (old) old.remove();
 
     const widget = document.createElement("div");
     widget.id = "cv-servant-floating-panel";
@@ -621,7 +673,7 @@
             <span class="cvs-dot"></span>
             <b>CV Servant</b>
           </div>
-          <button id="cvs-minimize-btn" title="تصغير/إخفاء">✕</button>
+          <button id="cvs-minimize-btn" title="إخفاء الزر العائم">✕</button>
         </div>
         <div class="cvs-floating-actions">
           <button id="cvs-floating-fill-btn" class="cvs-btn cvs-btn-fill">
@@ -646,6 +698,7 @@
     });
 
     document.getElementById("cvs-minimize-btn").addEventListener("click", () => {
+      // Minimize to small button or remove
       widget.classList.toggle("cvs-minimized");
     });
   }

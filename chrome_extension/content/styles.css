@@ -110,8 +110,14 @@
   box-shadow: 0 4px 12px rgba(5, 150, 105, 0.5);
 }
 
+/* Minimized Mode */
 #cv-servant-floating-panel.cvs-minimized .cvs-floating-actions {
   display: none;
+}
+
+#cv-servant-floating-panel.cvs-minimized .cvs-floating-header {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 #cv-servant-floating-panel.cvs-minimized .cvs-floating-box {
@@ -122,7 +128,7 @@
 /* Toast Notifications */
 #cvs-toast {
   position: fixed;
-  bottom: 80px;
+  bottom: 84px;
   right: 24px;
   z-index: 10000000;
   padding: 10px 16px;
